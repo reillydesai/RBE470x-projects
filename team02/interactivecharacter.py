@@ -27,3 +27,17 @@ class InteractiveCharacter(CharacterEntity):
         self.move(dx, dy)
         if bomb:
             self.place_bomb()
+
+
+        ## Grab map
+
+        ## Calculate A*
+        # g(n) = manhattan distance + proximity to monster
+        # h(n) = euclidean distance
+
+        ## Which direction is the next move in the path? 
+        
+        ## Move that way 
+        # self.move()
+
+
