@@ -32,11 +32,11 @@ class InteractiveCharacter(CharacterEntity):
         ## Grab map
 
         ## Calculate A*
-        # g(n) = manhattan distance + proximity to monster
+        # g(n) = manhattan distance + proximity to monster (max check: 3 cells)
         # h(n) = euclidean distance
 
         ## Which direction is the next move in the path? 
-        
+
         ## Move that way 
         # self.move()
 
