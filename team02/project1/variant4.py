@@ -10,7 +10,8 @@ from monsters.selfpreserving_monster import SelfPreservingMonster
 
 # TODO This is your code!
 sys.path.insert(1, '../team02')
-from testcharacter import TestCharacter
+# from testcharacter import TestCharacter
+from interactivecharacter import InteractiveCharacter
 
 # Create the game
 random.seed(123) # TODO Change this if you want different random choices
@@ -19,12 +20,16 @@ g.add_monster(SelfPreservingMonster("aggressive", # name
                                     "A",          # avatar
                                     3, 13,        # position
                                     2             # detection range
-))S
+))
 
 # TODO Add your character
-g.add_character(TestCharacter("me", # name
-                              "C",  # avatar
-                              0, 0  # position
+# g.add_character(TestCharacter("me", # name
+#                               "C",  # avatar
+#                               0, 0  # position
+# ))
+g.add_character(InteractiveCharacter("me", # name
+                                     "C",  # avatar
+                                     0, 0  # position
 ))
 
 # Run!
