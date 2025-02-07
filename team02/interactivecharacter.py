@@ -109,6 +109,8 @@ class InteractiveCharacter(CharacterEntity):
                 if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and danger_grid[(nx, ny)] == float('inf'):
                     danger_grid[(nx, ny)] = danger_grid[(x, y)] + 1
                     queue.append((nx, ny))
+                    if danger_grid[(nx, ny)] == 4:  # Stop expanding beyond 4 cells
+                        continue
         
         return danger_grid
 
@@ -120,10 +122,12 @@ class InteractiveCharacter(CharacterEntity):
         if dist == 0:  # Monster cell itself (wall)
             return float('inf')
         elif dist == 1:  # Cells around the monster (immediate danger)
-            return 10  # Wall-like behavior
+            return 15  # Wall-like behavior
         elif dist == 2:  # Two cells away from monster (heavy penalty)
-            return 5  # Heavy penalty
+            return 10  # Heavy penalty
         elif dist == 3:  # Three cells away from monster (light penalty)
+            return 5  # Light penalty
+        elif dist == 4:  # Four cells away from monster (slight penalty)
             return 2  # Light penalty
         return 1  # Default cost for free space
 
