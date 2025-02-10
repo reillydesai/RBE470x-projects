@@ -11,6 +11,9 @@ from collections import deque
 
 class InteractiveCharacter(CharacterEntity):
 
+    state = 0
+    turn_counter = 0
+
     def do(self, wrld):
         # Commands
         # dx, dy = 0, 0
@@ -44,17 +47,64 @@ class InteractiveCharacter(CharacterEntity):
         ## Move that way 
         # self.move()
 
-        """Determines the next move for the character using A* pathfinding."""
         me = wrld.me(self)  # Get current character state
         start = (me.x, me.y)  # Get character's starting position
-        goal = (wrld.width() - 1, wrld.height() - 1)  # Exit is always at the bottom-right corner
+
+        # ## Move that way 
+        # # self.move()
+
+
+        # Go to wall
+        if (self.state == 0):
+            goal = (wrld.width() - 2, wrld.height() - 5)  # Exit is always at the bottom-right corner
         
-        path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
+            path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
         
-        if path and len(path) > 0:
-            next_move = path[0]  # Get the next step in the path
-            dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-            self.move(dx, dy)  # Move in the determined direction
+            if start == goal:
+                self.place_bomb()
+                self.state = 1
+
+            elif path and len(path) > 0:
+                next_move = path[0]  # Get the next step in the path
+                dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
+                self.move(dx, dy)  # Move in the determined direction
+        if (self.state == 1):
+                
+            goal = (wrld.width() - 1, wrld.height() - 15)  # Exit is always at the bottom-right corner
+        
+            path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
+
+            if path and len(path) > 0:
+                next_move = path[0]  # Get the next step in the path
+                dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
+                self.move(dx, dy)  # Move in the determined direction
+
+            self.turn_counter += 1
+            if self.turn_counter >= 12:
+                self.state = 2
+        if (self.state == 2):
+        
+            goal = (wrld.width() - 1, wrld.height() - 1)  # Exit is always at the bottom-right corner
+        
+            path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
+
+            if path and len(path) > 0:
+                next_move = path[0]  # Get the next step in the path
+                dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
+                self.move(dx, dy)  # Move in the determined direction
+
+
+        # """Determines the next move for the character using A* pathfinding."""
+        # me = wrld.me(self)  # Get current character state
+        # start = (me.x, me.y)  # Get character's starting position
+        # goal = (wrld.width() - 1, wrld.height() - 1)  # Exit is always at the bottom-right corner
+        
+        # path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
+        
+        # if path and len(path) > 0:
+        #     next_move = path[0]  # Get the next step in the path
+        #     dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
+        #     self.move(dx, dy)  # Move in the determined direction
 
 
     def a_star(self, wrld, start, goal):
@@ -97,6 +147,7 @@ class InteractiveCharacter(CharacterEntity):
         
         # Directions for BFS: up, down, left, right
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        #directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
         
         # BFS to propagate danger levels
         while queue:
@@ -140,6 +191,8 @@ class InteractiveCharacter(CharacterEntity):
         x, y = pos
         neighbors = []
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        #directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+
         
         for dx, dy in directions:
             nx, ny = x + dx, y + dy
