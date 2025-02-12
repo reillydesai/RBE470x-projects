@@ -8,32 +8,36 @@ from colorama import Fore, Back
 import heapq
 import math
 from collections import deque
+import random
 
 class TestCharacter(CharacterEntity):
 
-    state = 0
     turn_counter = 0
     bomb1_dropped = False
     bomb2_dropped = False
+    chased = False
+    bomb_location = None
 
     def do(self, wrld):
 
+        self.turn_counter += 1
         me = wrld.me(self)  # Get current character state
         start = (me.x, me.y)  # Get character's starting position
         monster_distance = self.get_proximity_cost(wrld, me.x, me.y)
             
-        if monster_distance > 10:  # Monster is dangerously close
-            goal = self.find_best_retreat(wrld, start)
-            path = self.a_star(wrld, start, goal)  # Run away to top-left
-            if path and len(path) > 0:
-                    next_move = path[0]  # Get the next step in the path
-                    dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-                    self.move(dx, dy)  # Move in the determined direction
-                    return
+        if monster_distance > 300:  # Monster is dangerously close
+            print("FUCKKK")
+            dx, dy = self.find_best_retreat(wrld, start)
+            print(dx, dy)
+            self.move(dx, dy)
+            self.chased = True
+            return
             
+        self.chased = False
+
         # Define hardcoded bomb and exit locations
         bomb1 = (wrld.width() - 4, wrld.height() - 13)  # Example bomb1 location
-        bomb2 = (wrld.width() - 2, wrld.height() - 5)   # Example bomb2 location
+        bomb2 = (wrld.width() - 1, wrld.height() - 5)   # Example bomb2 location
         exit_point = (wrld.width() - 1, wrld.height() - 1)  # Exit point
 
         # Get the A* path and f(n) for each location
@@ -42,7 +46,7 @@ class TestCharacter(CharacterEntity):
         else:
             cost_bomb1 = float('inf')
             path_to_bomb1 = None
-        if not self.bomb2_dropped: 
+        if not self.bomb2_dropped and self.turn_counter > 12: 
             path_to_bomb2, cost_bomb2 = self.a_star_with_cost(wrld, start, bomb2)
         else:
             cost_bomb2 = float('inf')
@@ -63,127 +67,22 @@ class TestCharacter(CharacterEntity):
             goal = exit_point
 
 
-        if self.state == 0:
-            if start == goal and goal == bomb1:
-                self.bomb1_dropped = True
-                self.place_bomb()
-                #self.state = 1
-            if start == goal and goal == bomb2:
-                self.bomb2_dropped = True
-                self.place_bomb()
-                #self.state = 1   
-            elif path and len(path) > 0:
-                    next_move = path[0]  # Get the next step in the path
-                    dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-                    self.move(dx, dy)  # Move in the determined direction
-        elif self.state == 1:
-            goal = self.find_best_retreat(wrld, start)
-            path = self.a_star(wrld, start, goal) 
-            if path and len(path) > 0:
-                    next_move = path[0]  # Get the next step in the path
-                    dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-                    self.move(dx, dy)  # Move in the determined direction
+        if start == goal and goal == bomb1:
+            self.bomb1_dropped = True
+            self.place_bomb()
+            self.turn_counter = 0
+            self.bomb_location = bomb1
+        if start == goal and goal == bomb2 and self.turn_counter > 15:
+            self.bomb2_dropped = True
+            self.place_bomb()
+            self.bomb_location = bomb2 
+        elif path and len(path) > 0:
+                next_move = path[0]  # Get the next step in the path
+                dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
+                self.move(dx, dy)  # Move in the determined direction
 
 
-            self.turn_counter += 1
-            if self.turn_counter >= 1: #15
-                self.state = 0
-                self.turn_counter = 0
-
-
-        print(f"State: {self.state}, Goal: {goal}")
-
-            # self.escape_mode = False
-            # if (self.state == 0):
-            #     goal = (wrld.width() - 4, wrld.height() - 13)  # Exit is always at the bottom-right corner
-            
-            #     path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
-            
-            #     if start == goal:
-            #         self.place_bomb()
-            #         self.state = 1
-
-            #     elif path and len(path) > 0:
-            #         next_move = path[0]  # Get the next step in the path
-            #         dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-            #         self.move(dx, dy)  # Move in the determined direction
-            # if (self.state == 1):
-
-            #     goal = self.find_best_retreat(wrld, start)
-            #     path = self.a_star(wrld, start, goal)  # Run away to top-left
-            #     if path and len(path) > 0:
-            #             next_move = path[0]  # Get the next step in the path
-            #             dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-            #             self.move(dx, dy)  # Move in the determined direction
-
-
-            #     self.turn_counter += 1
-            #     if self.turn_counter >= 15:
-            #         self.state = 2
-            # if (self.state == 2):
-            
-            #     goal = (wrld.width() - 2, wrld.height() - 5)  # Exit is always at the bottom-right corner
-            
-            #     path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
-
-            #     if start == goal:
-            #         self.place_bomb()
-            #         self.state = 3
-
-            #     if path and len(path) > 0:
-            #         next_move = path[0]  # Get the next step in the path
-            #         dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-            #         self.move(dx, dy)  # Move in the determined direction
-            # if (self.state == 3):
-                    
-            #     #goal = (wrld.width() - 3, wrld.height() - 15)  # Exit is always at the bottom-right corner
-            #     # goal = (0,0)
-
-            #     # path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
-
-            #     # if path and len(path) > 0:
-            #     #     next_move = path[0]  # Get the next step in the path
-            #     #     dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-            #     #     self.move(dx, dy)  # Move in the determined direction
-
-
-            #     goal = self.find_best_retreat(wrld, start)
-            #     path = self.a_star(wrld, start, goal)  # Run away to top-left
-            #     if path and len(path) > 0:
-            #             next_move = path[0]  # Get the next step in the path
-            #             dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-            #             self.move(dx, dy)  # Move in the determined direction
-
-
-
-
-
-            #     self.turn_counter += 1
-            #     if self.turn_counter >= 15:
-            #         self.state = 4
-            # if (self.state == 4):
-            
-            #     goal = (wrld.width() - 1, wrld.height() - 1)  # Exit is always at the bottom-right corner
-            
-            #     path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
-
-            #     if path and len(path) > 0:
-            #         next_move = path[0]  # Get the next step in the path
-            #         dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-            #         self.move(dx, dy)  # Move in the determined direction
-
-
-        # """Determines the next move for the character using A* pathfinding."""
-        # me = wrld.me(self)  # Get current character state
-        # start = (me.x, me.y)  # Get character's starting position
-        # goal = (wrld.width() - 1, wrld.height() - 1)  # Exit is always at the bottom-right corner
-        
-        # path = self.a_star(wrld, start, goal)  # Compute A* path to the goal
-        
-        # if path and len(path) > 0:
-        #     next_move = path[0]  # Get the next step in the path
-        #     dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-        #     self.move(dx, dy)  # Move in the determined direction
+        print(f"Goal: {goal}")
 
 
     def a_star_with_cost(self, wrld, start, goal):
@@ -199,6 +98,8 @@ class TestCharacter(CharacterEntity):
             
             if current == goal:
                 total_cost = f_score[current]
+                if goal == (wrld.width() - 1, wrld.height() - 1):
+                    total_cost -= 1
                 return self.reconstruct_path(wrld, came_from, current), total_cost 
             
             for neighbor in self.get_neighbors(wrld, current):
@@ -228,14 +129,14 @@ class TestCharacter(CharacterEntity):
             
             for neighbor in self.get_neighbors(wrld, current):
                 # g(n) = Manhattan cost (1) + proximity to monster (max 3 cells)
-                temp_g_score = g_score[current] + 1 + self.get_proximity_cost(wrld, *neighbor)
+                temp_g_score = g_score[current] + 1 + self.get_proximity_cost(wrld, *neighbor) + self.get_bomb_cost(wrld, *neighbor)
                 if neighbor not in g_score or temp_g_score < g_score[neighbor]:
                     came_from[neighbor] = current
                     g_score[neighbor] = temp_g_score
                     f_score[neighbor] = temp_g_score + self.heuristic(neighbor, goal)
                     heapq.heappush(open_set, (f_score[neighbor], neighbor))
         
-        return None# No path found
+        return None # No path found
 
     def calculate_monster_proximity(self, wrld):
         """Calculates the proximity of monsters for all cells in the world."""
@@ -278,14 +179,22 @@ class TestCharacter(CharacterEntity):
         if dist == 0:  # Monster cell itself (wall)
             return float('inf')
         elif dist == 1:  # Cells around the monster (immediate danger)
-            return 100  # Wall-like behavior
+            return 1000  # Wall-like behavior
         elif dist == 2:  # Two cells away from monster (heavy penalty)
-            return 50  # Heavy penalty
+            return 500  # Heavy penalty
         elif dist == 3:  # Three cells away from monster (light penalty)
-            return 30  # Light penalty
+            return 300  # Light penalty
         elif dist == 4:  # Four cells away from monster (slight penalty)
-            return 10  # Light penalty
+            return 100  # Light penalty
         return 1  # Default cost for free space
+    
+    def get_bomb_cost(self, wrld, x, y):
+        if self.turn_counter > 12 and self.turn_counter < 16:
+            bx, by = self.bomb_location
+            if bx == x or bx == y:
+                if abs(bx - x) < 6 or abs(by - y) < 6:
+                    return 800 
+        return 0
 
     def heuristic(self, pos, goal):
         """Euclidean distance heuristic."""
@@ -335,41 +244,20 @@ class TestCharacter(CharacterEntity):
             self.set_cell_color(x, y, Fore.RED + Back.GREEN)
 
     def find_best_retreat(self, wrld, start):
-        # """Finds the safest and most reachable retreat location by selecting the neighbor
-        # that puts the character farthest away from the monster's neighbors."""
-        # # Get the 8 neighbors of the current position
-        # my_neighbors = self.get_neighbors(wrld, start)
-        
-        # # Get all the monster neighbors
-        # monster_neighbors = []
-        # for x in range(wrld.width()):
-        #     for y in range(wrld.height()):
-        #         if wrld.monsters_at(x, y):  # If there's a monster at this position
-        #             monster_neighbors.extend(self.get_neighbors(wrld, (x, y)))  # Add the monster's neighbors
-
-        # # Calculate the best retreat by choosing the neighbor that maximizes distance from monster neighbors
-        # best_neighbor = None
-        # max_distance = -1
-        
-        # for neighbor in my_neighbors:
-        #     # Find the minimum distance from this neighbor to any of the monster's neighbors
-        #     min_distance_to_monster = min([self.heuristic(neighbor, monster_neighbor) for monster_neighbor in monster_neighbors])
-            
-        #     # We want the neighbor that maximizes this minimum distance
-        #     if min_distance_to_monster > max_distance:
-        #         max_distance = min_distance_to_monster
-        #         best_neighbor = neighbor
-        
-        # # Return the best neighbor, or the start if no valid retreat is found
-        # return best_neighbor if best_neighbor else start
-        print("FUCKKKKK")
-
+        """Finds the best retreat direction away from the nearest monster."""
+       
         px, py = start
-        danger_grid = self.calculate_monster_proximity(wrld)
-
-        # BFS to find the nearest safe cell
         queue = deque([(px, py)])
         visited = set()
+        closest_monster = None
+        closest_distance = float('inf')
+
+        # Pre-populate the queue with cells in a 3-cell radius in all directions from the player
+        for dx in range(-3, 4):  # -3 to 3
+            for dy in range(-3, 4):  # -3 to 3
+                nx, ny = px + dx, py + dy
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and (nx, ny) != (px, py):
+                    queue.append((nx, ny))
 
         while queue:
             x, y = queue.popleft()
@@ -377,17 +265,82 @@ class TestCharacter(CharacterEntity):
                 continue
             visited.add((x, y))
 
-            if danger_grid.get((x, y), 0) == float('inf'):
-                # Move in the opposite direction of the safe cell
-                dx, dy = px - x, py - y
-                return px + (dx and (1 if dx < 0 else -1)), py + (dy and (1 if dy < 0 else -1))
+            # If a monster is found, determine the retreat direction
+            if wrld.monsters_at(x, y):
+                distance = abs(px - x) + abs(py - y)
 
-            # Explore neighbors
-            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
-                    queue.append((nx, ny))
-
-        return px, py
-
+                # If this monster is closer than the previous closest one, update the closest monster
+                if distance < closest_distance:
+                    closest_distance = distance
+                    closest_monster = (x, y)
             
+        if closest_monster:    
+            mx, my = closest_monster
+            dx, dy = px - mx, py - my  # Reverse direction away from the monster
+
+            # Normalize dx and dy to -1, 0, or 1
+            norm_dx = 0 if dx == 0 else (1 if dx > 0 else -1)
+            norm_dy = 0 if dy == 0 else (1 if dy > 0 else -1)
+
+            # Ensure the retreat cell is walkable
+            retreat_x, retreat_y = px + norm_dx, py + norm_dy
+            print(f"Attempting to retreat in direction ({norm_dx}, {norm_dy})")
+
+            if not (0 <= retreat_x < wrld.width() and 0 <= retreat_y < wrld.height()) or wrld.wall_at(retreat_x, retreat_y):
+                # If blocked by a wall, attempt side-stepping or another direction
+                print(f"Retreat blocked by a wall. Trying alternative directions...")
+
+                best_direction = (0, 0)
+                best_score = float('-inf')  # Start with an impossibly low score
+
+                
+                directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)] 
+
+                # Try side-stepping: if blocked, attempt other directions
+                for side_dx, side_dy in directions:
+                    alt_retreat_x, alt_retreat_y = px + side_dx, py + side_dy
+                    if 0 <= alt_retreat_x < wrld.width() and 0 <= alt_retreat_y < wrld.height():
+                        if not wrld.wall_at(alt_retreat_x, alt_retreat_y):
+
+                            score = 0
+
+                            # Calculate distance to the monster (lower score for being closer)
+                            dist_to_monster = abs(alt_retreat_x - mx) + abs(alt_retreat_y - my)
+                            score += dist_to_monster  # The closer to the monster, the worse
+                            
+                            # Check if it's near a wall (avoid getting trapped)
+                            score += self.wall_proximity(wrld, alt_retreat_x, alt_retreat_y)
+                
+
+                            # Update best direction if this direction has a better score
+                            if score > best_score:
+                                best_score = score
+                                best_direction = (side_dx, side_dy)
+
+
+                norm_dx, norm_dy = best_direction
+                print(f"Side-step successful. Retreating to ({norm_dx}, {norm_dy})")
+                            
+
+        
+
+            return norm_dx, norm_dy 
+
+        return 0, 0    
+    
+    def wall_proximity(self, wrld, x, y):
+        wall_score = 1
+        # Check surrounding cells within a 2-cell radius and avoid edges
+        for dx in range(-2, 3):  # From -2 to 2
+            for dy in range(-2, 3):  # From -2 to 2
+                nx, ny = x + dx, y + dy
+                # Ensure the new cell is within bounds
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                    # If a wall is found at the cell
+                    if wrld.wall_at(nx, ny):
+                        wall_score -= 1
+                else:
+                    # If the cell is out of bounds, treat it as a wall
+                    wall_score -= 1
+
+        return wall_score
