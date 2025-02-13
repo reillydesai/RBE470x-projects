@@ -17,18 +17,18 @@ class TestCharacter(CharacterEntity):
     bomb2_dropped = False
     chased = False
     bomb_location = None
+    danger_grid = None
 
     def do(self, wrld):
 
         self.turn_counter += 1
         me = wrld.me(self)  # Get current character state
         start = (me.x, me.y)  # Get character's starting position
+        self.danger_grid = self.calculate_monster_proximity(wrld)
         monster_distance = self.get_proximity_cost(wrld, me.x, me.y)
             
         if monster_distance > 300:  # Monster is dangerously close
-            print("FUCKKK")
             dx, dy = self.find_best_retreat(wrld, start)
-            print(dx, dy)
             self.move(dx, dy)
             self.chased = True
             return
@@ -42,16 +42,16 @@ class TestCharacter(CharacterEntity):
 
         # Get the A* path and f(n) for each location
         if not self.bomb1_dropped: 
-            path_to_bomb1, cost_bomb1 = self.a_star_with_cost(wrld, start, bomb1)
+            path_to_bomb1, cost_bomb1 = self.a_star(wrld, start, bomb1)
         else:
             cost_bomb1 = float('inf')
             path_to_bomb1 = None
         if not self.bomb2_dropped and self.turn_counter > 12: 
-            path_to_bomb2, cost_bomb2 = self.a_star_with_cost(wrld, start, bomb2)
+            path_to_bomb2, cost_bomb2 = self.a_star(wrld, start, bomb2)
         else:
             cost_bomb2 = float('inf')
             path_to_bomb2 = None
-        path_to_exit, cost_exit = self.a_star_with_cost(wrld, start, exit_point)
+        path_to_exit, cost_exit = self.a_star(wrld, start, exit_point)
 
         # Find the location with the cheapest path (minimum cost)
         min_cost = min(cost_bomb1, cost_bomb2, cost_exit)
@@ -85,7 +85,7 @@ class TestCharacter(CharacterEntity):
         print(f"Goal: {goal}")
 
 
-    def a_star_with_cost(self, wrld, start, goal):
+    def a_star(self, wrld, start, goal):
         """Finds the shortest path from start to goal using A*."""
         open_set = []  # Priority queue
         heapq.heappush(open_set, (0, start))  # (f-score, position)
@@ -112,31 +112,6 @@ class TestCharacter(CharacterEntity):
                     heapq.heappush(open_set, (f_score[neighbor], neighbor))
         
         return None, float('inf') # No path found
-
-    def a_star(self, wrld, start, goal):
-        """Finds the shortest path from start to goal using A*."""
-        open_set = []  # Priority queue
-        heapq.heappush(open_set, (0, start))  # (f-score, position)
-        came_from = {}
-        g_score = {start: 0}
-        f_score = {start: self.heuristic(start, goal)}
-        
-        while open_set:
-            _, current = heapq.heappop(open_set)
-            
-            if current == goal:
-                return self.reconstruct_path(wrld, came_from, current)
-            
-            for neighbor in self.get_neighbors(wrld, current):
-                # g(n) = Manhattan cost (1) + proximity to monster (max 3 cells)
-                temp_g_score = g_score[current] + 1 + self.get_proximity_cost(wrld, *neighbor) + self.get_bomb_cost(wrld, *neighbor)
-                if neighbor not in g_score or temp_g_score < g_score[neighbor]:
-                    came_from[neighbor] = current
-                    g_score[neighbor] = temp_g_score
-                    f_score[neighbor] = temp_g_score + self.heuristic(neighbor, goal)
-                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
-        
-        return None # No path found
 
     def calculate_monster_proximity(self, wrld):
         """Calculates the proximity of monsters for all cells in the world."""
@@ -173,8 +148,7 @@ class TestCharacter(CharacterEntity):
 
     def get_proximity_cost(self, wrld, x, y):
         """Returns the proximity cost for a given cell (x, y)."""
-        danger_grid = self.calculate_monster_proximity(wrld)
-        dist = danger_grid[(x, y)]
+        dist = self.danger_grid[(x, y)]
         
         if dist == 0:  # Monster cell itself (wall)
             return float('inf')
