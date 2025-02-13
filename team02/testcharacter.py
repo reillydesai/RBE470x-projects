@@ -22,12 +22,14 @@ class TestCharacter(CharacterEntity):
     def do(self, wrld):
 
         self.turn_counter += 1
+        
         me = wrld.me(self)  # Get current character state
         start = (me.x, me.y)  # Get character's starting position
         self.danger_grid = self.calculate_monster_proximity(wrld)
         monster_distance = self.get_proximity_cost(wrld, me.x, me.y)
             
-        if monster_distance > 300:  # Monster is dangerously close
+        # Retreat protocol
+        if monster_distance > 300 or (self.chased and monster_distance >= 300):              
             dx, dy = self.find_best_retreat(wrld, start)
             self.move(dx, dy)
             self.chased = True
@@ -74,6 +76,7 @@ class TestCharacter(CharacterEntity):
             self.bomb_location = bomb1
         if start == goal and goal == bomb2 and self.turn_counter > 15:
             self.bomb2_dropped = True
+            self.bomb1_dropped = True # we do not want it to backtrack if we don't have to
             self.place_bomb()
             self.bomb_location = bomb2 
         elif path and len(path) > 0:
@@ -99,7 +102,7 @@ class TestCharacter(CharacterEntity):
             if current == goal:
                 total_cost = f_score[current]
                 if goal == (wrld.width() - 1, wrld.height() - 1):
-                    total_cost -= 1
+                    total_cost -= 2
                 return self.reconstruct_path(wrld, came_from, current), total_cost 
             
             for neighbor in self.get_neighbors(wrld, current):
@@ -126,7 +129,7 @@ class TestCharacter(CharacterEntity):
                     danger_grid[(x, y)] = 0  # The monster cell itself has proximity 0
                     queue.append((x, y))  # Add to BFS queue
         
-        # Directions for BFS: up, down, left, right
+
         #directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
         
@@ -274,7 +277,7 @@ class TestCharacter(CharacterEntity):
                 for side_dx, side_dy in directions:
                     alt_retreat_x, alt_retreat_y = px + side_dx, py + side_dy
                     if 0 <= alt_retreat_x < wrld.width() and 0 <= alt_retreat_y < wrld.height():
-                        if not wrld.wall_at(alt_retreat_x, alt_retreat_y):
+                        if not wrld.wall_at(alt_retreat_x, alt_retreat_y) and not wrld.explosion_at(alt_retreat_x, alt_retreat_y):
 
                             score = 0
 
@@ -284,7 +287,12 @@ class TestCharacter(CharacterEntity):
                             
                             # Check if it's near a wall (avoid getting trapped)
                             score += self.wall_proximity(wrld, alt_retreat_x, alt_retreat_y)
-                
+                            
+                            # Avoid blowing up
+                            if self.bomb1_dropped:
+                                bomb_cost = self.get_bomb_cost(wrld, alt_retreat_x, alt_retreat_y)
+                                if bomb_cost > 0:
+                                    score -= .1
 
                             # Update best direction if this direction has a better score
                             if score > best_score:
