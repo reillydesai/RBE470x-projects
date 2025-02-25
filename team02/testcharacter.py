@@ -10,6 +10,9 @@ import math
 from collections import deque
 import random
 
+import json
+import os
+
 class TestCharacter(CharacterEntity):
 
     turn_counter = 0
@@ -18,74 +21,201 @@ class TestCharacter(CharacterEntity):
     chased = False
     bomb_location = None
     danger_grid = None
+    goal = (0,0)
+
+    alpha = 0.1  # Learning rate
+    gamma = 0.9  # Discount factor
+    epsilon = 0.1  # Exploration rate
+    weights = {}  # Feature weights
+    min_cost_to_exit = 0
+    max_cost_to_exit = 0
+
+    def __init__(self, name, avatar, x=0, y=0, *args, **kwargs):
+        # If avatar is not needed, you can pass a placeholder like `None`
+        super().__init__(name, avatar, x, y)
+        self.weights_file = "weights.json"
+        self.weights = self.load_weights()
+        
+    
 
     def do(self, wrld):
 
-        self.turn_counter += 1
-        
         me = wrld.me(self)  # Get current character state
-        start = (me.x, me.y)  # Get character's starting position
-        self.danger_grid = self.calculate_monster_proximity(wrld)
-        monster_distance = self.get_proximity_cost(wrld, me.x, me.y)
-            
-        # Retreat protocol
-        if monster_distance > 300 or (self.chased and monster_distance >= 300):              
-            dx, dy = self.find_best_retreat(wrld, start)
-            self.move(dx, dy)
-            self.chased = True
+        state= (me.x, me.y)  # Get character's starting position
+        self.danger_grid = self.calculate_danger_grid(wrld) # proximity of each cell to monster
+        self.goal = (wrld.width() - 1, wrld.height() - 1) 
+
+        
+        # Choose an action (ε-greedy)
+        possible_actions = self.get_possible_actions(wrld, state)
+        action = self.choose_action(wrld, state, possible_actions)
+
+        # Apply action and observe the next state
+        next_state = (state[0] + action[0], state[1] + action[1])
+        reward = self.get_reward(wrld, state, action, next_state)
+
+        # Update Q-learning weights
+        self.update_weights(wrld, state, action, reward, next_state)
+
+        # Execute the action
+        self.move(action[0], action[1])  # Move in chosen direction
+
+        print("Updated weights:", self.weights)
+
+
+
+    def get_features(self, wrld, state, action):
+        x, y = state
+        dx, dy = action
+        state_prime = (x + dx, y + dy)
+        
+        # Calculate features\
+        monster_proximity = self.get_proximity_cost(state_prime)
+        wall_proximity = self.get_wall_proximity(wrld, state_prime)
+        cost_to_exit = self.a_star(wrld, state_prime, self.goal)
+        
+        # Update min and max cost_to_exit values dynamically
+        self.min_cost_to_exit = min(self.min_cost_to_exit, cost_to_exit)
+        self.max_cost_to_exit = max(self.max_cost_to_exit, cost_to_exit)
+        
+        # Normalize cost_to_exit dynamically based on observed min/max
+        if self.max_cost_to_exit != self.min_cost_to_exit:  # Avoid division by zero
+            normalized_cost_to_exit = (cost_to_exit - self.min_cost_to_exit) / (self.max_cost_to_exit - self.min_cost_to_exit)
+        else:
+            normalized_cost_to_exit = 0 
+        
+        
+        # Normalize monster proximity to [0, 1] (assuming max value is 2000)
+        normalized_monster_proximity = min(max(monster_proximity, 0), 2000) / 2000
+        
+        # Normalize wall proximity (assuming the wall score is in [-5, 5])
+        normalized_wall_proximity = (wall_proximity + 5) / 10  # Now between 0 and 1
+        
+        features = {
+            "cost to exit": normalized_cost_to_exit,
+            "monster proximity": normalized_monster_proximity,
+            "wall proximity": normalized_wall_proximity
+        }
+        
+        return features
+
+
+    def get_q_value(self, wrld, state, action):
+        features = self.get_features(wrld, state, action)
+        return sum(self.weights.get(f, 0) * value for f, value in features.items())
+
+    def choose_action(self, wrld, state, possible_actions):
+        if random.random() < self.epsilon:
+            return random.choice(possible_actions)  # Exploration
+        return max(possible_actions, key=lambda a: self.get_q_value(wrld, state, a))  # Exploitation
+
+    # def update_weights(self, wrld, state, action, reward, next_state):
+    #     print("Before update:", self.weights)
+    #     features = self.get_features(wrld, state, action)
+    #     max_next_q = max(self.get_q_value(wrld, next_state, a) for a in self.get_possible_actions(wrld, next_state))
+    #     q_value = self.get_q_value(wrld, state, action)
+    #     td_error = reward + self.gamma * max_next_q - q_value  # Temporal Difference error
+
+    #     for feature, value in features.items():
+    #         if feature not in self.weights:
+    #             self.weights[feature] = 0  # Initialize weight if not set
+    #         self.weights[feature] += self.alpha * td_error * value  # Update weights
+
+    #     self.save_weights()  # Save updated weights to file
+
+
+    def update_weights(self, wrld, state, action, reward, next_state):
+        print("Before update:", self.weights)
+        features = self.get_features(wrld, state, action)
+        max_next_q = max(self.get_q_value(wrld, next_state, a) for a in self.get_possible_actions(wrld, next_state))
+        q_value = self.get_q_value(wrld, state, action)
+        td_error = reward + self.gamma * max_next_q - q_value  # Temporal Difference error
+
+        # Apply a cap to the temporal difference error (to avoid large updates)
+        td_error = max(min(td_error, 10), -10)
+
+        for feature, value in features.items():
+            if feature not in self.weights:
+                self.weights[feature] = 0
+            self.weights[feature] += self.alpha * td_error * value
+
+            # Clip weights to prevent overflow
+            self.weights[feature] = max(min(self.weights[feature], 50), -50)
+
+        self.save_weights()  # Save updated weights to file
+
+
+    def get_reward(self, wrld, state, action, next_state):
+    #     # Standard reward structure
+    #     if wrld.monsters_at(*next_state):
+    #         reward = -1000  # Heavy penalty for getting caught
+    #     elif wrld.exit_at(*next_state):
+    #         reward = 1000  # Huge reward for reaching exit
+    #     elif wrld.bomb_at(*next_state):
+    #         reward = -500  # Avoid bombs
+    #     else:
+    #         reward = -1  # Small penalty to encourage movement
+        
+    #     # Normalize the reward to [-1, 1]
+    #     if reward > 1000:
+    #         reward = 1
+    #     elif reward < -1000:
+    #         reward = -1
+    #     else:
+    #         reward = reward / 1000  # Scale to [-1, 1]
+        
+    #     return reward
+
+        if wrld.exit_at(*next_state):
+            reward = 10  # High reward for reaching the exit
+        else:
+            reward = -1  # Small penalty for normal movement
+        return reward
+
+
+        
+        
+
+    def get_possible_actions(self, wrld, state):
+        actions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]  
+        return [a for a in actions if self.is_valid_move(wrld, state, a)]
+
+    def is_valid_move(self, wrld, state, action):
+        x, y = state
+        dx, dy = action
+        nx, ny = x + dx, y + dy
+        return 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny)
+
+
+    def save_weights(self):
+        if not self.weights_file:
+            print("Error: weights_file is not set!")
             return
-            
-        self.chased = False
+        
+        try:
+            with open(self.weights_file, "w") as f:
+                json.dump(self.weights, f)
+            print(f"Weights successfully saved to {self.weights_file}")
+        except Exception as e:
+            print(f"Error saving weights: {e}")
 
-        # Define hardcoded bomb and exit locations
-        bomb1 = (wrld.width() - 4, wrld.height() - 13)  # Example bomb1 location
-        bomb2 = (wrld.width() - 1, wrld.height() - 5)   # Example bomb2 location
-        exit_point = (wrld.width() - 1, wrld.height() - 1)  # Exit point
 
-        # Get the A* path and f(n) for each location
-        if not self.bomb1_dropped: 
-            path_to_bomb1, cost_bomb1 = self.a_star(wrld, start, bomb1)
+    def load_weights(self):
+        if self.weights_file is None:
+            print("Error: weights_file is None!")
+            return {}
+        
+        if os.path.exists(self.weights_file):
+            with open(self.weights_file, "r") as f:
+                self.weights = json.load(f)
         else:
-            cost_bomb1 = float('inf')
-            path_to_bomb1 = None
-        if not self.bomb2_dropped and self.turn_counter > 12: 
-            path_to_bomb2, cost_bomb2 = self.a_star(wrld, start, bomb2)
-        else:
-            cost_bomb2 = float('inf')
-            path_to_bomb2 = None
-        path_to_exit, cost_exit = self.a_star(wrld, start, exit_point)
-
-        # Find the location with the cheapest path (minimum cost)
-        min_cost = min(cost_bomb1, cost_bomb2, cost_exit)
-
-        if min_cost == cost_bomb1:
-            path = path_to_bomb1
-            goal = bomb1
-        elif min_cost == cost_bomb2:
-            path = path_to_bomb2
-            goal = bomb2
-        else:
-            path = path_to_exit
-            goal = exit_point
+            self.weights = {}
+        
+        return self.weights
 
 
-        if start == goal and goal == bomb1:
-            self.bomb1_dropped = True
-            self.place_bomb()
-            self.turn_counter = 0
-            self.bomb_location = bomb1
-        if start == goal and goal == bomb2 and self.turn_counter > 15:
-            self.bomb2_dropped = True
-            self.bomb1_dropped = True # we do not want it to backtrack if we don't have to
-            self.place_bomb()
-            self.bomb_location = bomb2 
-        elif path and len(path) > 0:
-                next_move = path[0]  # Get the next step in the path
-                dx, dy = next_move[0] - start[0], next_move[1] - start[1]  # Calculate movement vector
-                self.move(dx, dy)  # Move in the determined direction
 
 
-        print(f"Goal: {goal}")
 
 
     def a_star(self, wrld, start, goal):
@@ -101,13 +231,10 @@ class TestCharacter(CharacterEntity):
             
             if current == goal:
                 total_cost = f_score[current]
-                if goal == (wrld.width() - 1, wrld.height() - 1):
-                    total_cost -= 2
-                return self.reconstruct_path(wrld, came_from, current), total_cost 
+                return total_cost
             
             for neighbor in self.get_neighbors(wrld, current):
-                # g(n) = Manhattan cost (1) + proximity to monster (max 3 cells)
-                temp_g_score = g_score[current] + 1 + self.get_proximity_cost(wrld, *neighbor)
+                temp_g_score = g_score[current] + 1 + self.get_proximity_cost(neighbor)
                 if neighbor not in g_score or temp_g_score < g_score[neighbor]:
                     came_from[neighbor] = current
                     g_score[neighbor] = temp_g_score
@@ -116,7 +243,7 @@ class TestCharacter(CharacterEntity):
         
         return None, float('inf') # No path found
 
-    def calculate_monster_proximity(self, wrld):
+    def calculate_danger_grid(self, wrld):
         """Calculates the proximity of monsters for all cells in the world."""
         # Initialize the danger grid with a high value
         danger_grid = { (x, y): float('inf') for x in range(wrld.width()) for y in range(wrld.height()) }
@@ -129,8 +256,6 @@ class TestCharacter(CharacterEntity):
                     danger_grid[(x, y)] = 0  # The monster cell itself has proximity 0
                     queue.append((x, y))  # Add to BFS queue
         
-
-        #directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
         
         # BFS to propagate danger levels
@@ -149,29 +274,22 @@ class TestCharacter(CharacterEntity):
         
         return danger_grid
 
-    def get_proximity_cost(self, wrld, x, y):
+    def get_proximity_cost(self, state):
         """Returns the proximity cost for a given cell (x, y)."""
-        dist = self.danger_grid[(x, y)]
+        dist = self.danger_grid[state]
         
         if dist == 0:  # Monster cell itself (wall)
-            return float('inf')
+            return 20
         elif dist == 1:  # Cells around the monster (immediate danger)
-            return 1000  # Wall-like behavior
+            return 10  # Wall-like behavior
         elif dist == 2:  # Two cells away from monster (heavy penalty)
-            return 500  # Heavy penalty
+            return 5  # Heavy penalty
         elif dist == 3:  # Three cells away from monster (light penalty)
-            return 300  # Light penalty
+            return 3  # Light penalty
         elif dist == 4:  # Four cells away from monster (slight penalty)
-            return 100  # Light penalty
+            return 2  # Light penalty
         return 1  # Default cost for free space
     
-    def get_bomb_cost(self, wrld, x, y):
-        if self.turn_counter > 12 and self.turn_counter < 16:
-            bx, by = self.bomb_location
-            if bx == x or bx == y:
-                if abs(bx - x) < 6 or abs(by - y) < 6:
-                    return 800 
-        return 0
 
     def heuristic(self, pos, goal):
         """Euclidean distance heuristic."""
@@ -181,137 +299,18 @@ class TestCharacter(CharacterEntity):
         """Returns valid neighboring positions (up, down, left, right) ignoring walls."""
         x, y = pos
         neighbors = []
-        #directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
-
-        danger_grid = self.calculate_monster_proximity(wrld)  # Get monster proximity map
         
         for dx, dy in directions:
             nx, ny = x + dx, y + dy
             if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny):
                 neighbors.append((nx, ny))
-        
-        # If in escape mode, prioritize the SAFEST move, even if it's away from the goal
-        # if self.escape_mode:
-        #     neighbors.sort(key=lambda cell: danger_grid[cell], reverse=True)  # Move to safest cell
-
 
         return neighbors
-
-    def reconstruct_path(self, wrld, came_from, current):
-        """Reconstructs the path from goal to start."""
-        path = []
-        while current in came_from:
-            path.append(current)
-            current = came_from[current]
-        path.reverse()
-        self.visualize_path(wrld, path)
-        
-        return path
     
-    def visualize_path(self, wrld, path):
-        """Resets all cells to default color."""
-        for x in range(wrld.width()):
-            for y in range(wrld.height()):
-                self.set_cell_color(x, y, Fore.WHITE + Back.BLACK)  # Default color (white text on black background)
-
-        """Visualizes the path by marking each cell with a color."""
-        for x, y in path:
-            # Mark the cell with a color (red text on green background)
-            self.set_cell_color(x, y, Fore.RED + Back.GREEN)
-
-    def find_best_retreat(self, wrld, start):
-        """Finds the best retreat direction away from the nearest monster."""
-       
-        px, py = start
-        queue = deque([(px, py)])
-        visited = set()
-        closest_monster = None
-        closest_distance = float('inf')
-
-        # Pre-populate the queue with cells in a 3-cell radius in all directions from the player
-        for dx in range(-3, 4):  # -3 to 3
-            for dy in range(-3, 4):  # -3 to 3
-                nx, ny = px + dx, py + dy
-                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and (nx, ny) != (px, py):
-                    queue.append((nx, ny))
-
-        while queue:
-            x, y = queue.popleft()
-            if (x, y) in visited:
-                continue
-            visited.add((x, y))
-
-            # If a monster is found, determine the retreat direction
-            if wrld.monsters_at(x, y):
-                distance = abs(px - x) + abs(py - y)
-
-                # If this monster is closer than the previous closest one, update the closest monster
-                if distance < closest_distance:
-                    closest_distance = distance
-                    closest_monster = (x, y)
-            
-        if closest_monster:    
-            mx, my = closest_monster
-            dx, dy = px - mx, py - my  # Reverse direction away from the monster
-
-            # Normalize dx and dy to -1, 0, or 1
-            norm_dx = 0 if dx == 0 else (1 if dx > 0 else -1)
-            norm_dy = 0 if dy == 0 else (1 if dy > 0 else -1)
-
-            # Ensure the retreat cell is walkable
-            retreat_x, retreat_y = px + norm_dx, py + norm_dy
-            print(f"Attempting to retreat in direction ({norm_dx}, {norm_dy})")
-
-            if not (0 <= retreat_x < wrld.width() and 0 <= retreat_y < wrld.height()) or wrld.wall_at(retreat_x, retreat_y):
-                # If blocked by a wall, attempt side-stepping or another direction
-                print(f"Retreat blocked by a wall. Trying alternative directions...")
-
-                best_direction = (0, 0)
-                best_score = float('-inf')  # Start with an impossibly low score
-
-                
-                directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)] 
-
-                # Try side-stepping: if blocked, attempt other directions
-                for side_dx, side_dy in directions:
-                    alt_retreat_x, alt_retreat_y = px + side_dx, py + side_dy
-                    if 0 <= alt_retreat_x < wrld.width() and 0 <= alt_retreat_y < wrld.height():
-                        if not wrld.wall_at(alt_retreat_x, alt_retreat_y) and not wrld.explosion_at(alt_retreat_x, alt_retreat_y):
-
-                            score = 0
-
-                            # Calculate distance to the monster (lower score for being closer)
-                            dist_to_monster = abs(alt_retreat_x - mx) + abs(alt_retreat_y - my)
-                            score += dist_to_monster  # The closer to the monster, the worse
-                            
-                            # Check if it's near a wall (avoid getting trapped)
-                            score += self.wall_proximity(wrld, alt_retreat_x, alt_retreat_y)
-                            
-                            # Avoid blowing up
-                            if self.bomb1_dropped:
-                                bomb_cost = self.get_bomb_cost(wrld, alt_retreat_x, alt_retreat_y)
-                                if bomb_cost > 0:
-                                    score -= .1
-
-                            # Update best direction if this direction has a better score
-                            if score > best_score:
-                                best_score = score
-                                best_direction = (side_dx, side_dy)
-
-
-                norm_dx, norm_dy = best_direction
-                print(f"Side-step successful. Retreating to ({norm_dx}, {norm_dy})")
-                            
-
-        
-
-            return norm_dx, norm_dy 
-
-        return 0, 0    
-    
-    def wall_proximity(self, wrld, x, y):
+    def get_wall_proximity(self, wrld, state):
         wall_score = 1
+        x, y = state
         # Check surrounding cells within a 2-cell radius and avoid edges
         for dx in range(-2, 3):  # From -2 to 2
             for dy in range(-2, 3):  # From -2 to 2
