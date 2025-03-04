@@ -4,6 +4,8 @@ sys.path.insert(0, '../bomberman')
 # Import necessary stuff
 from entity import CharacterEntity
 from colorama import Fore, Back
+from sensed_world import SensedWorld
+from events import Event
 
 import heapq
 import math
@@ -24,9 +26,9 @@ class TestCharacter(CharacterEntity):
     danger_grid = None
 
 
-    alpha = 0.1  # Learning rate
-    gamma = 0.9  # Discount factor
-    epsilon = 0.1  # Exploration rate
+    alpha = 0.05  # Learning rate
+    gamma = .7 # Discount factor
+    epsilon = .8  # Exploration rate
     weights = {}  # Feature weights
     min_cost_to_exit = 0
     max_cost_to_exit = 0
@@ -68,7 +70,6 @@ class TestCharacter(CharacterEntity):
         # Update Q-learning weights
         self.update_weights(wrld, state, action, reward, next_state)
 
-
         print("Updated weights:", self.weights)
 
 
@@ -83,27 +84,25 @@ class TestCharacter(CharacterEntity):
         
         # Calculate features
         if self.monster_present:
-            monster_proximity = -1 * self.get_proximity_cost(wrld, state_prime)
+            monster_proximity = self.get_proximity_cost(wrld, state_prime)
         else:
             monster_proximity = None
         if self.explosion_present:
-            explosion_proximity = self.explosion_grid[state_prime]
+            explosion_proximity = 1/self.explosion_grid[state_prime]
         else:
             explosion_proximity = None
-        if self.turn_counter > 6 and self.turn_counter < 10:
-            bomb_proximity = self.get_bomb_cost(wrld, state_prime)
-        else:
-            bomb_proximity = None
+        bomb_proximity = 1/self.get_bomb_cost(wrld, state_prime)
 
         wall_proximity, edge_proximity = self.get_barrier_proximity(wrld, state_prime)
-        cost_to_exit = 1 / self.a_star(wrld, state_prime, self.goal)
+        #cost_to_exit = 1 / self.a_star(wrld, state_prime, self.goal)
+        cost_to_exit = 1 / (0.5 * self.heuristic(state_prime, self.goal))
 
         
         features = {
-            "cost to exit": cost_to_exit,
-            "monster proximity": monster_proximity,
-            "wall proximity": wall_proximity,
-            "edge proximity": edge_proximity,
+            #"cost to exit": cost_to_exit,
+            #"monster proximity": monster_proximity,
+            #"wall proximity": wall_proximity,
+            #"edge proximity": edge_proximity,
             "explosion proximity": explosion_proximity,
             "bomb proximity": bomb_proximity
         }
@@ -128,6 +127,7 @@ class TestCharacter(CharacterEntity):
         print("Before update:", self.weights)
         features = self.get_features(wrld, state, action)
         max_next_q = max(self.get_q_value(wrld, next_state, a) for a in self.get_possible_actions(wrld, next_state))
+        print(max_next_q)
         q_value = self.get_q_value(wrld, state, action)
         delta = (reward + (self.gamma * max_next_q)) - q_value  # Temporal Difference error
 
@@ -138,23 +138,30 @@ class TestCharacter(CharacterEntity):
                 self.weights[feature] += self.alpha * delta * value
 
                 # Clip weights to prevent overflow
-                self.weights[feature] = max(min(self.weights[feature], 500), -500)
+                self.weights[feature] = max(min(self.weights[feature], 1000), -1000)
 
         self.save_weights()  # Save updated weights to file
 
 
     def get_reward(self, wrld, state, action, next_state):
-        if wrld.monsters_at(*next_state):
-            reward = -1000  # Heavy penalty for getting caught
-        elif wrld.bomb_at(*next_state):
-            reward = -1000  # Avoid bombs
-        elif wrld.explosion_at(*next_state):
-            reward = -1000  
-        elif wrld.exit_at(*next_state):
-            reward = 100  # High reward for reaching the exit
-        else:
-            reward = -1  # Small penalty for normal movement
+        new_world, events = wrld.next()
+        
+        reward = 1  
+
+        for event in events:
+            if event.tpe == Event.CHARACTER_KILLED_BY_MONSTER and event.character == self:
+                reward = -10  # Heavy penalty for getting caught
+            elif event.tpe == Event.BOMB_HIT_CHARACTER and event.other == self:
+                reward = -10  # Avoid getting hit by bombs
+            elif event.tpe == Event.BOMB_HIT_WALL and event.character == self:
+                reward += 5  # Reward for destroying walls
+            elif event.tpe == Event.BOMB_HIT_MONSTER and event.character == self:
+                reward += 5  # High reward for killing a monster
+            elif event.tpe == Event.CHARACTER_FOUND_EXIT and event.character == self:
+                reward = 10  # High reward for reaching the exit
+
         return reward
+
         
 
     def get_possible_actions(self, wrld, state):
@@ -276,7 +283,7 @@ class TestCharacter(CharacterEntity):
 
     def calculate_explosion_grid(self, wrld):
         self.explosion_present = False
-        explosion_grid = { (x, y): 0 for x in range(wrld.width()) for y in range(wrld.height()) }
+        explosion_grid = { (x, y): .25 for x in range(wrld.width()) for y in range(wrld.height()) }
 
         queue = deque()
         for x in range(wrld.width()):
@@ -295,7 +302,7 @@ class TestCharacter(CharacterEntity):
             # If we're already at distance 3, stop expanding further
             for dx, dy in directions:
                 nx, ny = x + dx, y + dy
-                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and explosion_grid[(nx, ny)] == 0:
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and explosion_grid[(nx, ny)] == .25:
                     explosion_grid[(nx, ny)] = .5
         
         return explosion_grid
@@ -333,27 +340,27 @@ class TestCharacter(CharacterEntity):
     def get_proximity_cost(self, wrld, state):
         """Returns the proximity cost for a given cell (x, y)."""
         if not self.is_valid_move(wrld, state, (0,0)):
-            return 500
+            return .1
         dist = self.danger_grid[state]
         
         if dist == 0:  # Monster cell itself (wall)
-            return 40
+            return 1
         elif dist == 1:  # Cells around the monster (immediate danger)
-            return 30  # Wall-like behavior
+            return 2  # Wall-like behavior
         elif dist == 2:  # Two cells away from monster (heavy penalty)
-            return 20  # Heavy penalty
+            return 3  # Heavy penalty
         elif dist == 3:  # Three cells away from monster (light penalty)
-            return 10  # Light penalty
+            return 4  # Light penalty
         elif dist == 4:  # Four cells away from monster (slight penalty)
             return 5  # Light penalty
-        return 1  # Default cost for free space
+        return 6  # Default cost for free space
     
         
     def get_bomb_cost(self, wrld, state):
         bomb_grid  = self.calculate_bomb_grid(wrld)
         """Returns the proximity cost for a given cell (x, y)."""
         if not self.is_valid_move(wrld, state, (0,0)) or bomb_grid[state] == 1:
-            return 500
+            return 5
         return 1  # Default cost for free space
     
     
@@ -376,8 +383,8 @@ class TestCharacter(CharacterEntity):
         return neighbors
     
     def get_barrier_proximity(self, wrld, state):
-        wall_score = -1
-        edge_score = -1
+        wall_score = 10
+        edge_score = 10
         x, y = state
         # Check surrounding cells within a 2-cell radius and avoid edges
         for dx in range(-2, 3):  # From -2 to 2
