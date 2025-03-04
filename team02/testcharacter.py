@@ -26,9 +26,9 @@ class TestCharacter(CharacterEntity):
     danger_grid = None
 
 
-    alpha = 0.05  # Learning rate
+    alpha = 0.01 # Learning rate
     gamma = .7 # Discount factor
-    epsilon = .8  # Exploration rate
+    epsilon = 0.05  # Exploration rate
     weights = {}  # Feature weights
     min_cost_to_exit = 0
     max_cost_to_exit = 0
@@ -42,13 +42,14 @@ class TestCharacter(CharacterEntity):
     
 
     def do(self, wrld):
-        self.turn_counter += 1
-        print(self.turn_counter)
+        # self.turn_counter += 1
+        # print(self.turn_counter)
 
         me = wrld.me(self)  # Get current character state
         state = (me.x, me.y)  # Get character's starting position
+        new_world, events = wrld.next()
         self.danger_grid = self.calculate_danger_grid(wrld) # proximity of each cell to monster
-        self.explosion_grid = self.calculate_explosion_grid(wrld)
+        self.explosion_grid = self.calculate_explosion_grid(new_world)
         self.goal = (wrld.width() - 1, wrld.height() - 1) 
 
         
@@ -58,16 +59,13 @@ class TestCharacter(CharacterEntity):
    
         direction, place_bomb = action
         if place_bomb:
-            self.place_bomb()  # Place the bomb if the action is to place a bomb
-            self.turn_counter = 0
-        # Move in the chosen direction
+            self.place_bomb()  
+            #self.turn_counter = 0
         self.move(direction[0], direction[1])
 
-        # Apply action and observe the next state
         next_state = (state[0] + direction[0], state[1] + direction[1])
         reward = self.get_reward(wrld, state, action, next_state)
 
-        # Update Q-learning weights
         self.update_weights(wrld, state, action, reward, next_state)
 
         print("Updated weights:", self.weights)
@@ -78,6 +76,7 @@ class TestCharacter(CharacterEntity):
         direction, place_bomb = action
         dx, dy = direction
         state_prime = (x + dx, y + dy)
+        new_world, events = wrld.next()
 
         if not self.is_valid_move(wrld, state, direction):
             return {} 
@@ -91,11 +90,11 @@ class TestCharacter(CharacterEntity):
             explosion_proximity = 1/self.explosion_grid[state_prime]
         else:
             explosion_proximity = None
-        bomb_proximity = 1/self.get_bomb_cost(wrld, state_prime)
+        bomb_proximity = self.get_bomb_cost(new_world, state_prime)
 
         wall_proximity, edge_proximity = self.get_barrier_proximity(wrld, state_prime)
         #cost_to_exit = 1 / self.a_star(wrld, state_prime, self.goal)
-        cost_to_exit = 1 / (0.5 * self.heuristic(state_prime, self.goal))
+        cost_to_exit = y*5
 
         
         features = {
@@ -145,19 +144,22 @@ class TestCharacter(CharacterEntity):
 
     def get_reward(self, wrld, state, action, next_state):
         new_world, events = wrld.next()
+        x, y = next_state
         
-        reward = 1  
+        reward = y * .5
+        if self.get_bomb_cost(new_world, next_state) > 1:
+            reward += 20
 
         for event in events:
-            if event.tpe == Event.CHARACTER_KILLED_BY_MONSTER and event.character == self:
+            if event.tpe == Event.CHARACTER_KILLED_BY_MONSTER:
                 reward = -10  # Heavy penalty for getting caught
-            elif event.tpe == Event.BOMB_HIT_CHARACTER and event.other == self:
+            elif event.tpe == Event.BOMB_HIT_CHARACTER:
                 reward = -10  # Avoid getting hit by bombs
-            elif event.tpe == Event.BOMB_HIT_WALL and event.character == self:
+            elif event.tpe == Event.BOMB_HIT_WALL:
                 reward += 5  # Reward for destroying walls
-            elif event.tpe == Event.BOMB_HIT_MONSTER and event.character == self:
+            elif event.tpe == Event.BOMB_HIT_MONSTER:
                 reward += 5  # High reward for killing a monster
-            elif event.tpe == Event.CHARACTER_FOUND_EXIT and event.character == self:
+            elif event.tpe == Event.CHARACTER_FOUND_EXIT:
                 reward = 10  # High reward for reaching the exit
 
         return reward
@@ -166,7 +168,7 @@ class TestCharacter(CharacterEntity):
 
     def get_possible_actions(self, wrld, state):
         # Define direction actions (up, down, left, right, and diagonals)
-        directions = [(0, 0), (0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+        directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
         
         # Initialize actions list with direction and 'place_bomb' boolean
         actions = []
@@ -174,7 +176,9 @@ class TestCharacter(CharacterEntity):
         for direction in directions:
             # Add action where placing a bomb is an option (True/False)
             actions.append((direction, False))  # First, without placing a bomb
-            actions.append((direction, True))   # Second, with placing a bomb
+            #actions.append((direction, True))   # Second, with placing a bomb
+        
+        actions.append(((0, 0), True))
             
         # Filter the actions based on whether the move is valid or not
         actions = [(direction, place_bomb) for direction, place_bomb in actions if self.is_valid_move(wrld, state, direction)]
@@ -308,16 +312,14 @@ class TestCharacter(CharacterEntity):
         return explosion_grid
     
     def calculate_bomb_grid(self, wrld):
-        self.explosion_present = False
         explosion_grid = { (x, y): 0 for x in range(wrld.width()) for y in range(wrld.height()) }
 
         queue = deque()
         for x in range(wrld.width()):
             for y in range(wrld.height()):
-                if wrld.explosion_at(x, y):  
+                if wrld.bomb_at(x, y):  
                     explosion_grid[(x, y)] = 1 
                     queue.append((x, y)) 
-                    self.explosion_present = True
 
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         
@@ -360,8 +362,8 @@ class TestCharacter(CharacterEntity):
         bomb_grid  = self.calculate_bomb_grid(wrld)
         """Returns the proximity cost for a given cell (x, y)."""
         if not self.is_valid_move(wrld, state, (0,0)) or bomb_grid[state] == 1:
-            return 5
-        return 1  # Default cost for free space
+            return 1
+        return 5  # Default cost for free space
     
     
 
