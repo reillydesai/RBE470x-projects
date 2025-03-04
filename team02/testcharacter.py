@@ -16,12 +16,13 @@ import os
 class TestCharacter(CharacterEntity):
 
     turn_counter = 0
-    bomb1_dropped = False
-    bomb2_dropped = False
-    chased = False
+    update_counter = False
+
+    monster_present = False
+    explosion_present = False
     bomb_location = None
     danger_grid = None
-    goal = (0,0)
+
 
     alpha = 0.1  # Learning rate
     gamma = 0.9  # Discount factor
@@ -39,62 +40,72 @@ class TestCharacter(CharacterEntity):
     
 
     def do(self, wrld):
+        self.turn_counter += 1
+        print(self.turn_counter)
 
         me = wrld.me(self)  # Get current character state
-        state= (me.x, me.y)  # Get character's starting position
+        state = (me.x, me.y)  # Get character's starting position
         self.danger_grid = self.calculate_danger_grid(wrld) # proximity of each cell to monster
+        self.explosion_grid = self.calculate_explosion_grid(wrld)
         self.goal = (wrld.width() - 1, wrld.height() - 1) 
 
         
         # Choose an action (ε-greedy)
         possible_actions = self.get_possible_actions(wrld, state)
         action = self.choose_action(wrld, state, possible_actions)
+   
+        direction, place_bomb = action
+        if place_bomb:
+            self.place_bomb()  # Place the bomb if the action is to place a bomb
+            self.turn_counter = 0
+        # Move in the chosen direction
+        self.move(direction[0], direction[1])
 
         # Apply action and observe the next state
-        next_state = (state[0] + action[0], state[1] + action[1])
+        next_state = (state[0] + direction[0], state[1] + direction[1])
         reward = self.get_reward(wrld, state, action, next_state)
 
         # Update Q-learning weights
         self.update_weights(wrld, state, action, reward, next_state)
 
-        # Execute the action
-        self.move(action[0], action[1])  # Move in chosen direction
 
         print("Updated weights:", self.weights)
 
 
-
     def get_features(self, wrld, state, action):
         x, y = state
-        dx, dy = action
+        direction, place_bomb = action
+        dx, dy = direction
         state_prime = (x + dx, y + dy)
+
+        if not self.is_valid_move(wrld, state, direction):
+            return {} 
         
-        # Calculate features\
-        monster_proximity = self.get_proximity_cost(state_prime)
-        wall_proximity = self.get_wall_proximity(wrld, state_prime)
-        cost_to_exit = self.a_star(wrld, state_prime, self.goal)
-        
-        # Update min and max cost_to_exit values dynamically
-        self.min_cost_to_exit = min(self.min_cost_to_exit, cost_to_exit)
-        self.max_cost_to_exit = max(self.max_cost_to_exit, cost_to_exit)
-        
-        # Normalize cost_to_exit dynamically based on observed min/max
-        if self.max_cost_to_exit != self.min_cost_to_exit:  # Avoid division by zero
-            normalized_cost_to_exit = (cost_to_exit - self.min_cost_to_exit) / (self.max_cost_to_exit - self.min_cost_to_exit)
+        # Calculate features
+        if self.monster_present:
+            monster_proximity = -1 * self.get_proximity_cost(wrld, state_prime)
         else:
-            normalized_cost_to_exit = 0 
-        
-        
-        # Normalize monster proximity to [0, 1] (assuming max value is 2000)
-        normalized_monster_proximity = min(max(monster_proximity, 0), 2000) / 2000
-        
-        # Normalize wall proximity (assuming the wall score is in [-5, 5])
-        normalized_wall_proximity = (wall_proximity + 5) / 10  # Now between 0 and 1
+            monster_proximity = None
+        if self.explosion_present:
+            explosion_proximity = self.explosion_grid[state_prime]
+        else:
+            explosion_proximity = None
+        if self.turn_counter > 6 and self.turn_counter < 10:
+            bomb_proximity = self.get_bomb_cost(wrld, state_prime)
+        else:
+            bomb_proximity = None
+
+        wall_proximity, edge_proximity = self.get_barrier_proximity(wrld, state_prime)
+        cost_to_exit = 1 / self.a_star(wrld, state_prime, self.goal)
+
         
         features = {
-            "cost to exit": normalized_cost_to_exit,
-            "monster proximity": normalized_monster_proximity,
-            "wall proximity": normalized_wall_proximity
+            "cost to exit": cost_to_exit,
+            "monster proximity": monster_proximity,
+            "wall proximity": wall_proximity,
+            "edge proximity": edge_proximity,
+            "explosion proximity": explosion_proximity,
+            "bomb proximity": bomb_proximity
         }
         
         return features
@@ -102,26 +113,15 @@ class TestCharacter(CharacterEntity):
 
     def get_q_value(self, wrld, state, action):
         features = self.get_features(wrld, state, action)
-        return sum(self.weights.get(f, 0) * value for f, value in features.items())
+        # Filter out features with None values
+        valid_features = {f: value for f, value in features.items() if value is not None}
+        return sum(self.weights.get(f, 0) * value for f, value in valid_features.items())
+
 
     def choose_action(self, wrld, state, possible_actions):
         if random.random() < self.epsilon:
             return random.choice(possible_actions)  # Exploration
         return max(possible_actions, key=lambda a: self.get_q_value(wrld, state, a))  # Exploitation
-
-    # def update_weights(self, wrld, state, action, reward, next_state):
-    #     print("Before update:", self.weights)
-    #     features = self.get_features(wrld, state, action)
-    #     max_next_q = max(self.get_q_value(wrld, next_state, a) for a in self.get_possible_actions(wrld, next_state))
-    #     q_value = self.get_q_value(wrld, state, action)
-    #     td_error = reward + self.gamma * max_next_q - q_value  # Temporal Difference error
-
-    #     for feature, value in features.items():
-    #         if feature not in self.weights:
-    #             self.weights[feature] = 0  # Initialize weight if not set
-    #         self.weights[feature] += self.alpha * td_error * value  # Update weights
-
-    #     self.save_weights()  # Save updated weights to file
 
 
     def update_weights(self, wrld, state, action, reward, next_state):
@@ -129,62 +129,59 @@ class TestCharacter(CharacterEntity):
         features = self.get_features(wrld, state, action)
         max_next_q = max(self.get_q_value(wrld, next_state, a) for a in self.get_possible_actions(wrld, next_state))
         q_value = self.get_q_value(wrld, state, action)
-        td_error = reward + self.gamma * max_next_q - q_value  # Temporal Difference error
-
-        # Apply a cap to the temporal difference error (to avoid large updates)
-        td_error = max(min(td_error, 10), -10)
+        delta = reward + self.gamma * max_next_q - q_value  # Temporal Difference error
 
         for feature, value in features.items():
             if feature not in self.weights:
                 self.weights[feature] = 0
-            self.weights[feature] += self.alpha * td_error * value
+            if value is not None:
+                self.weights[feature] += self.alpha * delta * value
 
-            # Clip weights to prevent overflow
-            self.weights[feature] = max(min(self.weights[feature], 50), -50)
+                # Clip weights to prevent overflow
+                self.weights[feature] = max(min(self.weights[feature], 500), -500)
 
         self.save_weights()  # Save updated weights to file
 
 
     def get_reward(self, wrld, state, action, next_state):
-    #     # Standard reward structure
-    #     if wrld.monsters_at(*next_state):
-    #         reward = -1000  # Heavy penalty for getting caught
-    #     elif wrld.exit_at(*next_state):
-    #         reward = 1000  # Huge reward for reaching exit
-    #     elif wrld.bomb_at(*next_state):
-    #         reward = -500  # Avoid bombs
-    #     else:
-    #         reward = -1  # Small penalty to encourage movement
-        
-    #     # Normalize the reward to [-1, 1]
-    #     if reward > 1000:
-    #         reward = 1
-    #     elif reward < -1000:
-    #         reward = -1
-    #     else:
-    #         reward = reward / 1000  # Scale to [-1, 1]
-        
-    #     return reward
-
-        if wrld.exit_at(*next_state):
-            reward = 10  # High reward for reaching the exit
+        if wrld.monsters_at(*next_state):
+            reward = -1000  # Heavy penalty for getting caught
+        elif wrld.bomb_at(*next_state):
+            reward = -1000  # Avoid bombs
+        elif wrld.explosion_at(*next_state):
+            reward = -1000  
+        elif wrld.exit_at(*next_state):
+            reward = 100  # High reward for reaching the exit
         else:
             reward = -1  # Small penalty for normal movement
         return reward
-
-
-        
         
 
     def get_possible_actions(self, wrld, state):
-        actions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]  
-        return [a for a in actions if self.is_valid_move(wrld, state, a)]
+        # Define direction actions (up, down, left, right, and diagonals)
+        directions = [(0, 0), (0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+        
+        # Initialize actions list with direction and 'place_bomb' boolean
+        actions = []
+        
+        for direction in directions:
+            # Add action where placing a bomb is an option (True/False)
+            actions.append((direction, False))  # First, without placing a bomb
+            actions.append((direction, True))   # Second, with placing a bomb
+            
+        # Filter the actions based on whether the move is valid or not
+        actions = [(direction, place_bomb) for direction, place_bomb in actions if self.is_valid_move(wrld, state, direction)]
+        print(actions)
+
+        return actions
+
+
 
     def is_valid_move(self, wrld, state, action):
         x, y = state
         dx, dy = action
         nx, ny = x + dx, y + dy
-        return 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny)
+        return 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny) and not wrld.bomb_at(nx,ny)
 
 
     def save_weights(self):
@@ -230,21 +227,22 @@ class TestCharacter(CharacterEntity):
             _, current = heapq.heappop(open_set)
             
             if current == goal:
-                total_cost = f_score[current]
+                total_cost = f_score[current] + 1
                 return total_cost
             
             for neighbor in self.get_neighbors(wrld, current):
-                temp_g_score = g_score[current] + 1 + self.get_proximity_cost(neighbor)
+                temp_g_score = g_score[current] + 1 #+ self.get_proximity_cost(neighbor)
                 if neighbor not in g_score or temp_g_score < g_score[neighbor]:
                     came_from[neighbor] = current
                     g_score[neighbor] = temp_g_score
                     f_score[neighbor] = temp_g_score + self.heuristic(neighbor, goal)
                     heapq.heappush(open_set, (f_score[neighbor], neighbor))
         
-        return None, float('inf') # No path found
+        return 10000 # No path found
 
     def calculate_danger_grid(self, wrld):
         """Calculates the proximity of monsters for all cells in the world."""
+        self.monster_present = False
         # Initialize the danger grid with a high value
         danger_grid = { (x, y): float('inf') for x in range(wrld.width()) for y in range(wrld.height()) }
 
@@ -255,6 +253,7 @@ class TestCharacter(CharacterEntity):
                 if wrld.monsters_at(x, y):  # If there is a monster in the cell
                     danger_grid[(x, y)] = 0  # The monster cell itself has proximity 0
                     queue.append((x, y))  # Add to BFS queue
+                    self.monster_present = True
         
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
         
@@ -273,22 +272,90 @@ class TestCharacter(CharacterEntity):
                         continue
         
         return danger_grid
+    
 
-    def get_proximity_cost(self, state):
+    def calculate_explosion_grid(self, wrld):
+        self.explosion_present = False
+        explosion_grid = { (x, y): 0 for x in range(wrld.width()) for y in range(wrld.height()) }
+
+        queue = deque()
+        for x in range(wrld.width()):
+            for y in range(wrld.height()):
+                if wrld.explosion_at(x, y):  
+                    explosion_grid[(x, y)] = 1 
+                    queue.append((x, y)) 
+                    self.explosion_present = True
+
+        directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+        
+        # BFS to propagate danger levels
+        while queue:
+            x, y = queue.popleft()
+            
+            # If we're already at distance 3, stop expanding further
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and explosion_grid[(nx, ny)] == 0:
+                    explosion_grid[(nx, ny)] = .5
+        
+        return explosion_grid
+    
+    def calculate_bomb_grid(self, wrld):
+        self.explosion_present = False
+        explosion_grid = { (x, y): 0 for x in range(wrld.width()) for y in range(wrld.height()) }
+
+        queue = deque()
+        for x in range(wrld.width()):
+            for y in range(wrld.height()):
+                if wrld.explosion_at(x, y):  
+                    explosion_grid[(x, y)] = 1 
+                    queue.append((x, y)) 
+                    self.explosion_present = True
+
+        directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        
+        # BFS to propagate danger levels
+        while queue:
+            x, y = queue.popleft()
+            
+            # If we're already at distance 3, stop expanding further
+            for dx, dy in directions:
+                nx, ny = x, y
+                for i in range(6):
+                    nx += dx
+                    ny += dy
+                    if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and explosion_grid[(nx, ny)] == 0:
+                        explosion_grid[(nx, ny)] = 1
+        
+        return explosion_grid
+        
+    
+    def get_proximity_cost(self, wrld, state):
         """Returns the proximity cost for a given cell (x, y)."""
+        if not self.is_valid_move(wrld, state, (0,0)):
+            return 500
         dist = self.danger_grid[state]
         
         if dist == 0:  # Monster cell itself (wall)
-            return 20
+            return 40
         elif dist == 1:  # Cells around the monster (immediate danger)
-            return 10  # Wall-like behavior
+            return 30  # Wall-like behavior
         elif dist == 2:  # Two cells away from monster (heavy penalty)
-            return 5  # Heavy penalty
+            return 20  # Heavy penalty
         elif dist == 3:  # Three cells away from monster (light penalty)
-            return 3  # Light penalty
+            return 10  # Light penalty
         elif dist == 4:  # Four cells away from monster (slight penalty)
-            return 2  # Light penalty
+            return 5  # Light penalty
         return 1  # Default cost for free space
+    
+        
+    def get_bomb_cost(self, wrld, state):
+        bomb_grid  = self.calculate_bomb_grid(wrld)
+        """Returns the proximity cost for a given cell (x, y)."""
+        if not self.is_valid_move(wrld, state, (0,0)) or bomb_grid[state] == 1:
+            return 500
+        return 1  # Default cost for free space
+    
     
 
     def heuristic(self, pos, goal):
@@ -308,8 +375,9 @@ class TestCharacter(CharacterEntity):
 
         return neighbors
     
-    def get_wall_proximity(self, wrld, state):
-        wall_score = 1
+    def get_barrier_proximity(self, wrld, state):
+        wall_score = -1
+        edge_score = -1
         x, y = state
         # Check surrounding cells within a 2-cell radius and avoid edges
         for dx in range(-2, 3):  # From -2 to 2
@@ -321,7 +389,7 @@ class TestCharacter(CharacterEntity):
                     if wrld.wall_at(nx, ny):
                         wall_score -= 1
                 else:
-                    # If the cell is out of bounds, treat it as a wall
-                    wall_score -= 1
+                    # edge penalty
+                    edge_score -= 1
 
-        return wall_score
+        return wall_score, edge_score
