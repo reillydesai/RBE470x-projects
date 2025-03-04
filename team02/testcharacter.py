@@ -129,7 +129,7 @@ class TestCharacter(CharacterEntity):
         features = self.get_features(wrld, state, action)
         max_next_q = max(self.get_q_value(wrld, next_state, a) for a in self.get_possible_actions(wrld, next_state))
         q_value = self.get_q_value(wrld, state, action)
-        delta = reward + self.gamma * max_next_q - q_value  # Temporal Difference error
+        delta = (reward + (self.gamma * max_next_q)) - q_value  # Temporal Difference error
 
         for feature, value in features.items():
             if feature not in self.weights:
