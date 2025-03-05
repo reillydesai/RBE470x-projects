@@ -11,7 +11,7 @@ from monsters.stupid_monster import StupidMonster
 
 # TODO This is your code!
 sys.path.insert(1, '../team02')
-from testcharacter import TestCharacter
+from team02.testcharacter1 import TestCharacter
 #from interactivecharacter import InteractiveCharacter
 
 # Create the game

@@ -21,14 +21,15 @@ class TestCharacter(CharacterEntity):
     update_counter = False
 
     monster_present = False
-    explosion_present = False
-    bomb_location = None
+    explosion_positions = []
+    monster_positions = []
     danger_grid = None
+    obstacles = []
 
 
     alpha = 0.01 # Learning rate
     gamma = .7 # Discount factor
-    epsilon = 0.05  # Exploration rate
+    epsilon = 0.1  # Exploration rate
     weights = {}  # Feature weights
     min_cost_to_exit = 0
     max_cost_to_exit = 0
@@ -47,9 +48,11 @@ class TestCharacter(CharacterEntity):
 
         me = wrld.me(self)  # Get current character state
         state = (me.x, me.y)  # Get character's starting position
-        new_world, events = wrld.next()
-        self.danger_grid = self.calculate_danger_grid(wrld) # proximity of each cell to monster
-        self.explosion_grid = self.calculate_explosion_grid(new_world)
+        new_wrld, events = wrld.next()
+        
+        self.explosion_positions = self.get_explosion_positions(new_wrld)
+        self.danger_grid = self.calculate_danger_grid(wrld)
+
         self.goal = (wrld.width() - 1, wrld.height() - 1) 
 
         
@@ -79,34 +82,58 @@ class TestCharacter(CharacterEntity):
         new_world, events = wrld.next()
 
         if not self.is_valid_move(wrld, state, direction):
-            return {} 
-        
-        # Calculate features
-        if self.monster_present:
-            monster_proximity = self.get_proximity_cost(wrld, state_prime)
-        else:
-            monster_proximity = None
-        if self.explosion_present:
-            explosion_proximity = 1/self.explosion_grid[state_prime]
-        else:
-            explosion_proximity = None
+            return {}  # Invalid move, return no features
+
+        # **New Feature Definitions**
+        escape_value = self.escape_from_danger(state_prime, wrld)
+
         bomb_proximity = self.get_bomb_cost(new_world, state_prime)
+        monster_proximity = self.get_proximity_cost(wrld, state)  # Higher = better
+        cost_to_exit = 1 / (self.heuristic(state, self.goal) + 1)  # Normalize, avoid div by zero
+        safe_tiles = sum(1 for neighbor in self.get_neighbors(wrld, state_prime) if neighbor not in self.obstacles)
+        wall_proximity, edge_proximity = self.get_barrier_proximity(wrld, state)
 
-        wall_proximity, edge_proximity = self.get_barrier_proximity(wrld, state_prime)
-        #cost_to_exit = 1 / self.a_star(wrld, state_prime, self.goal)
-        cost_to_exit = y*5
-
-        
         features = {
-            #"cost to exit": cost_to_exit,
-            #"monster proximity": monster_proximity,
-            #"wall proximity": wall_proximity,
-            #"edge proximity": edge_proximity,
-            "explosion proximity": explosion_proximity,
-            "bomb proximity": bomb_proximity
+            "escape feasibility": escape_value,
+            "bomb proximity": bomb_proximity,
+            "monster proximity": monster_proximity,
+            "exit proximity": cost_to_exit,
+            "safe tile availability": safe_tiles,
+            "wall proximity": wall_proximity,
+            "edge proximity": edge_proximity
+
         }
-        
+
+        print(features)
+
         return features
+
+    
+    def escape_from_danger(self, state, wrld):
+
+        # Ensure explosion_positions and monster_positions are always lists (empty if None)
+        self.explosion_positions = self.explosion_positions or []
+        self.monster_positions = self.monster_positions or []
+
+        # Create obstacles set from explosion and monster positions
+        self.obstacles = set(self.explosion_positions) | set(self.monster_positions)
+
+        # Check if there are no obstacles
+        if self.obstacles == []:
+            return 1.0  # No danger, completely safe
+
+        me_x, me_y = state
+        safe_tiles = [(x, y) for x in range(me_x-1, me_x+1) for y in range(me_y-1, me_y+1)
+                    if (x, y) not in self.obstacles and self.is_valid_move(wrld, state, (x,y))]  # All non-dangerous tiles
+
+        if not safe_tiles:
+            return 0  # No safe zone, worst-case scenario
+
+        # Find the shortest path to any safe tile
+        min_escape_length = min(self.a_star(wrld, state, safe_tile) for safe_tile in safe_tiles)
+
+        return 1.0 / (1 + min_escape_length)  # Normalize: Closer to 1 means safer, closer to 0 means trapped.
+
 
 
     def get_q_value(self, wrld, state, action):
@@ -117,8 +144,11 @@ class TestCharacter(CharacterEntity):
 
 
     def choose_action(self, wrld, state, possible_actions):
+        
+        valid_actions = [a for a in possible_actions if self.is_valid_move(wrld, state, a[0])]
+    
         if random.random() < self.epsilon:
-            return random.choice(possible_actions)  # Exploration
+            return random.choice(valid_actions)   # Exploration
         return max(possible_actions, key=lambda a: self.get_q_value(wrld, state, a))  # Exploitation
 
 
@@ -146,7 +176,7 @@ class TestCharacter(CharacterEntity):
         new_world, events = wrld.next()
         x, y = next_state
         
-        reward = y * .5
+        reward = 0.5 * y * y 
         if self.get_bomb_cost(new_world, next_state) > 1:
             reward += 20
 
@@ -154,7 +184,7 @@ class TestCharacter(CharacterEntity):
             if event.tpe == Event.CHARACTER_KILLED_BY_MONSTER:
                 reward = -10  # Heavy penalty for getting caught
             elif event.tpe == Event.BOMB_HIT_CHARACTER:
-                reward = -10  # Avoid getting hit by bombs
+                reward = -20  # Avoid getting hit by bombs
             elif event.tpe == Event.BOMB_HIT_WALL:
                 reward += 5  # Reward for destroying walls
             elif event.tpe == Event.BOMB_HIT_MONSTER:
@@ -168,7 +198,7 @@ class TestCharacter(CharacterEntity):
 
     def get_possible_actions(self, wrld, state):
         # Define direction actions (up, down, left, right, and diagonals)
-        directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+        directions = [(0,0), (0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
         
         # Initialize actions list with direction and 'place_bomb' boolean
         actions = []
@@ -192,7 +222,7 @@ class TestCharacter(CharacterEntity):
         x, y = state
         dx, dy = action
         nx, ny = x + dx, y + dy
-        return 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny) and not wrld.bomb_at(nx,ny)
+        return 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny) and not wrld.bomb_at(nx,ny) and not wrld.explosion_at(nx,ny) and not wrld.monsters_at(nx,ny)
 
 
     def save_weights(self):
@@ -238,7 +268,7 @@ class TestCharacter(CharacterEntity):
             _, current = heapq.heappop(open_set)
             
             if current == goal:
-                total_cost = f_score[current] + 1
+                total_cost = g_score[current] + 1
                 return total_cost
             
             for neighbor in self.get_neighbors(wrld, current):
@@ -249,11 +279,12 @@ class TestCharacter(CharacterEntity):
                     f_score[neighbor] = temp_g_score + self.heuristic(neighbor, goal)
                     heapq.heappush(open_set, (f_score[neighbor], neighbor))
         
-        return 10000 # No path found
+        return 40 # No path found
 
     def calculate_danger_grid(self, wrld):
         """Calculates the proximity of monsters for all cells in the world."""
         self.monster_present = False
+        self.monster_positions = []
         # Initialize the danger grid with a high value
         danger_grid = { (x, y): float('inf') for x in range(wrld.width()) for y in range(wrld.height()) }
 
@@ -264,6 +295,7 @@ class TestCharacter(CharacterEntity):
                 if wrld.monsters_at(x, y):  # If there is a monster in the cell
                     danger_grid[(x, y)] = 0  # The monster cell itself has proximity 0
                     queue.append((x, y))  # Add to BFS queue
+                    self.monster_positions.append((x,y))
                     self.monster_present = True
         
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
@@ -272,13 +304,14 @@ class TestCharacter(CharacterEntity):
         while queue:
             x, y = queue.popleft()
             
-            # If we're already at distance 3, stop expanding further
             for dx, dy in directions:
                 nx, ny = x + dx, y + dy
                 
                 if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and danger_grid[(nx, ny)] == float('inf'):
                     danger_grid[(nx, ny)] = danger_grid[(x, y)] + 1
                     queue.append((nx, ny))
+                    if danger_grid[(nx, ny)] == 1:
+                        self.monster_positions.append((x,y))
                     if danger_grid[(nx, ny)] == 4:  # Stop expanding beyond 4 cells
                         continue
         
@@ -338,6 +371,35 @@ class TestCharacter(CharacterEntity):
         
         return explosion_grid
         
+
+    def get_explosion_positions(self, wrld):
+        self.explosion_positions = []
+
+        queue = deque()
+        for x in range(wrld.width()):
+            for y in range(wrld.height()):
+                if wrld.bomb_at(x, y):  
+                    self.explosion_positions.append((x, y)) 
+                    queue.append((x,y))
+                if wrld.explosion_at(x,y):
+                    self.explosion_positions.append((x, y)) 
+
+        directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        
+        # BFS to propagate danger levels
+        while queue:
+            x, y = queue.popleft()
+            
+            # If we're already at distance 3, stop expanding further
+            for dx, dy in directions:
+                nx, ny = x, y
+                for i in range(6):
+                    nx += dx
+                    ny += dy
+                    if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                        self.explosion_positions.append((x, y)) 
+        
+        return
     
     def get_proximity_cost(self, wrld, state):
         """Returns the proximity cost for a given cell (x, y)."""

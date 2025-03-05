@@ -6,4 +6,4 @@ num_runs = 100
 for i in range(num_runs):
     print(f"Run iteration {i+1}")
     # Replace 'python3' with 'python' if necessary for your environment
-    subprocess.run(["python3", "variant1.py"])
+    subprocess.run(["python3", "variant3.py"])

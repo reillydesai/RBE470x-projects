@@ -1,1 +1,1 @@
-{"cost to exit": 0, "monster proximity": 0, "wall proximity": 0, "explosion proximity": 0.006670284440273434, "bomb proximity": 14.147280349874098}
+{"escape feasibility": 26.65433133461825, "bomb proximity": 8.940054344899748, "monster proximity": -0.680958475101531, "exit proximity": 15.814576946599255, "safe tile availability": -0.77031755754766, "wall proximity": -1.5689392990487936, "edge proximity": -0.8065983413882802}
