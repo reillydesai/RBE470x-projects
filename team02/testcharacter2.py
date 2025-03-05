@@ -34,8 +34,9 @@ class TestCharacter(CharacterEntity):
     def __init__(self, name, avatar, x=0, y=0):
         super().__init__(name, avatar, x, y)
         
-        # Add model save path
-        self.model_path = "trained_model.pth"
+        # Set absolute path for model save and print it
+        self.model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trained_model.pth")
+        print(f"Model path is: {self.model_path}")
         
         # Define all possible actions
         self.all_actions = [
@@ -411,22 +412,20 @@ class TestCharacter(CharacterEntity):
                     
         return safe_neighbors
 
+
+
     def save_model(self):
         """Save the trained model"""
-        torch.save({
-            'main_network_state_dict': self.main_network.state_dict(),
-            'target_network_state_dict': self.target_network.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'epsilon': self.epsilon
-        }, self.model_path)
+        print(f"Saving model to: {self.model_path}")
+        torch.save(self.main_network.state_dict(), self.model_path)
 
     def load_model(self):
-        """Load a trained model"""
-        checkpoint = torch.load(self.model_path)
-        self.main_network.load_state_dict(checkpoint['main_network_state_dict'])
-        self.target_network.load_state_dict(checkpoint['target_network_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.epsilon = checkpoint['epsilon']
+        """Load the trained model if it exists"""
+        if os.path.exists(self.model_path):
+            print(f"Loading model from: {self.model_path}")
+            self.main_network.load_state_dict(torch.load(self.model_path))
+            self.target_network.load_state_dict(self.main_network.state_dict())
+
 
     def get_path_positions(self, start, goal):
         """Get positions along path to goal"""

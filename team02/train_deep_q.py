@@ -52,12 +52,12 @@ def train_on_world(variant_file, num_games=2):
             if "exit" in output:
                 stats['wins'] += 1
                 print(f"Game {i}: Won!")
-            elif "monster" in output:
-                stats['monster_deaths'] += 1
-                print(f"Game {i}: Killed by monster")
             elif "self" in output:
                 stats['explosion_deaths'] += 1
                 print(f"Game {i}: Killed by bomb")
+            elif "killed" in output:
+                stats['monster_deaths'] += 1
+                print(f"Game {i}: Killed by monster")
             else:
                 stats['timeouts'] += 1
                 print(f"Game {i}: Timeout/Other")
