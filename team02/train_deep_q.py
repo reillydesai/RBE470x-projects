@@ -49,7 +49,7 @@ def train_on_world(variant_file, num_games=5):
             
             # Parse the output to determine game result
             output = result.stdout
-            if "exit" in output:
+            if "me found the exit" in output:
                 stats['wins'] += 1
                 print(f"Game {i}: Won!")
             elif "self" in output and not "selfp" in output:

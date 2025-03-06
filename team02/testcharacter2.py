@@ -62,8 +62,8 @@ class TestCharacter(CharacterEntity):
         self.gamma = 0.99  # Discount factor
         self.epsilon = 1.0  # Starting exploration rate
         self.epsilon_min = 0.01  # Minimum exploration rate
-        self.epsilon_decay = 0.995  # Decay rate for epsilon
-        self.learning_rate = 0.001
+        self.epsilon_decay = 0.9999816  # Decay rate for epsilon for 250,000 steps (5000 steps per episode and 50 episodes)
+        self.learning_rate = 0.0005
         self.batch_size = 32
         
         # State and action dimensions
@@ -83,7 +83,8 @@ class TestCharacter(CharacterEntity):
         
         # Additional tracking variables
         self.steps = 0
-        self.update_target_every = 100  # Update target network every 100 steps 
+        self.update_target_every = 50  # Update target network every 50 steps
+        self.total_reward = 0.0  # Track total accumulated reward
 
         # Attempt to load model right away
         loaded = self.load_model()
@@ -190,13 +191,23 @@ class TestCharacter(CharacterEntity):
         loss.backward()
         self.optimizer.step()
 
+
+        #Implement double DQN
+        with torch.no_grad():
+            # Main network selects actions
+            next_action_indices = self.main_network(next_states).argmax(dim=1, keepdim=True)
+            # Target network evaluates those actions
+            next_q_values = self.target_network(next_states).gather(1, next_action_indices).squeeze()
+            target_q = rewards + (1 - dones) * self.gamma * next_q_values
+
     def update_target_network(self):
         """Update target network weights"""
         if self.steps % self.update_target_every == 0:
             self.target_network.load_state_dict(self.main_network.state_dict())
 
-    def get_reward(self, wrld, state, action, next_state, events):
-        """Calculate reward with stronger focus on vertical movement"""
+
+    """ def get_reward(self, wrld, state, action, next_state, events):
+        #Calculate reward with stronger focus on vertical movement
         reward = 0
         x, y = next_state
         
@@ -262,6 +273,32 @@ class TestCharacter(CharacterEntity):
             elif event.tpe == Event.BOMB_HIT_WALL:
                 reward += 10
         
+        return reward """
+    
+    def get_reward(self, wrld, state, action, next_state, events):
+        reward = 0
+        
+        # Goal is the exit
+        goal = (wrld.width() - 1, wrld.height() - 1)
+        
+        # Reward progress toward goal more uniformly
+        current_distance = self.heuristic(state, goal)
+        next_distance = self.heuristic(next_state, goal)
+        reward += (current_distance - next_distance) * 3
+        
+        # Simple event-based rewards
+        for event in events:
+            if event.tpe == Event.CHARACTER_KILLED_BY_MONSTER:
+                reward -= 100
+            elif event.tpe == Event.BOMB_HIT_CHARACTER:
+                reward -= 100
+            elif event.tpe == Event.CHARACTER_FOUND_EXIT:
+                reward += 200
+            elif event.tpe == Event.BOMB_HIT_MONSTER:
+                reward += 30
+            elif event.tpe == Event.BOMB_HIT_WALL:
+                reward += 5
+        
         return reward
 
     def do(self, wrld):
@@ -313,6 +350,9 @@ class TestCharacter(CharacterEntity):
         reward = self.get_reward(wrld, (self.x, self.y), (direction, place_bomb), 
                                (self.x + direction[0], self.y + direction[1]), events)
         
+        # Update total reward
+        self.total_reward += reward
+        
         # Store experience
         done = any(e.tpe == Event.CHARACTER_KILLED_BY_MONSTER or 
                   e.tpe == Event.CHARACTER_FOUND_EXIT for e in events)
@@ -335,7 +375,7 @@ class TestCharacter(CharacterEntity):
         
         # Save model on important events
         if any(e.tpe == Event.CHARACTER_FOUND_EXIT for e in events):
-            print("🎯 Exit found! Saving model...")
+            print(f"🎯 Exit found! Saving model... Total reward: {self.total_reward:.2f}")
             self.save_model()
             self.last_save_time = datetime.now()
         elif any(e.tpe == Event.BOMB_HIT_WALL for e in events):
@@ -611,17 +651,34 @@ class TestCharacter(CharacterEntity):
 
 # Add this at the end of the file to force a save when the module is unloaded
 import atexit
+import json
 
 def exit_handler():
-    """Save the model when the program exits"""
+    """Save the model and log training metrics when the program exits"""
     print("🔚 Program exiting, saving model...")
-    # Since we can't access the character instance directly here,
-    # we'll create a hack to ensure the model is saved
     try:
         if 'testcharacter_instance' in globals() and testcharacter_instance is not None:
+            # Save the model
             testcharacter_instance.save_model()
-    except:
-        pass
+            
+            # Log training metrics in JSONL format
+            log_path = os.path.join(os.path.dirname(testcharacter_instance.model_path), "training_log.jsonl")
+            log_entry = {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "epsilon": float(testcharacter_instance.epsilon),
+                "steps": int(testcharacter_instance.steps),
+                "total_reward": float(testcharacter_instance.total_reward)
+            }
+            
+            # Append the JSON line to the log file
+            with open(log_path, "a") as log_file:
+                json.dump(log_entry, log_file)
+                log_file.write('\n')
+                
+            print(f"📝 Training metrics logged to {log_path}")
+            print(f"   → Total reward: {testcharacter_instance.total_reward:.2f}")
+    except Exception as e:
+        print(f"❌ Error in exit handler: {e}")
 
 atexit.register(exit_handler)
 
@@ -635,4 +692,4 @@ def new_init(self, *args, **kwargs):
     global testcharacter_instance
     testcharacter_instance = self
     
-TestCharacter.__init__ = new_init 
+TestCharacter.__init__ = new_init
