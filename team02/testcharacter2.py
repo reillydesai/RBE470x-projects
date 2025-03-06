@@ -18,6 +18,7 @@ import os  # File operations
 from datetime import datetime  # Time tracking
 import atexit  # Register exit handler
 import json  # JSON handling for logging
+import heapq  # Add this with other imports
 
 # Define the neural network architecture
 class DQNetwork(nn.Module):
@@ -40,7 +41,6 @@ class DQNetwork(nn.Module):
 class TestCharacter(CharacterEntity):
     def __init__(self, name, avatar, x=0, y=0):
         super().__init__(name, avatar, x, y)  # Initialize parent class
-        
         # Set up model saving path
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.model_path = os.path.join(script_dir, "trained_model.pth")
@@ -104,7 +104,44 @@ class TestCharacter(CharacterEntity):
 
 
     def do(self, wrld):
-        """Main game loop with time-based autosave"""
+        """Main game loop with A* override"""
+
+        print("steps: ",self.steps)
+        # Check for clear path to exit
+        clear_path_exists, path = self.is_clear_path_to_exit(wrld)
+        
+        if clear_path_exists and path:
+            # Use A* path
+            next_pos = path[0]
+            dx = next_pos[0] - self.x
+            dy = next_pos[1] - self.y
+            
+            # Store current state for reward calculation
+            current_state = (self.x, self.y)
+            
+            # Don't place bombs when we have a clear path
+            self.move(dx, dy)
+            
+            # Get events after movement
+            new_wrld, events = wrld.next()
+            self.last_events = events
+            
+            # Calculate reward including win condition
+            reward = 100  # Base reward for following optimal path
+            
+            # Use the regular reward function to ensure we get win rewards
+            reward += self.get_reward(wrld, current_state, ((dx, dy), False), 
+                                    (self.x, self.y), events)
+            
+            # Update total reward
+            self.total_reward += reward
+            
+            # Increment step counter
+            self.steps += 1
+            
+            return
+            
+        # If no clear path, continue with normal DQN behavior
         # Initialize events as empty list by default
         events = []
         
@@ -166,7 +203,7 @@ class TestCharacter(CharacterEntity):
         self.total_reward += reward
         
         # Store experience
-        done = any(e.tpe == Event.CHARACTER_KILLED_BY_MONSTER or Event.CHARACTER_KILLED_BY_BOMB
+        done = any(e.tpe == Event.CHARACTER_KILLED_BY_MONSTER or Event.BOMB_HIT_CHARACTER
                   or e.tpe == Event.CHARACTER_FOUND_EXIT for e in events)
         
         # Ensure action_idx is within bounds
@@ -194,7 +231,7 @@ class TestCharacter(CharacterEntity):
             print("💥 Monster killed! Saving model...")
             self.save_model()
             self.last_save_time = datetime.now()
-        elif any(e.tpe == Event.CHARACTER_KILLED_BY_BOMB for e in events):
+        elif any(e.tpe == Event.BOMB_HIT_CHARACTER for e in events):
             print("💥 Bomb killed! Saving model...")
             self.save_model()
             self.last_save_time = datetime.now()
@@ -250,6 +287,8 @@ class TestCharacter(CharacterEntity):
 
     def get_reward(self, wrld, state, action, next_state, events):
         reward = 0
+
+        (dx, dy), place_bomb = action
         
         # Goal is the exit
         goal = (wrld.width() - 1, wrld.height() - 1)
@@ -257,22 +296,55 @@ class TestCharacter(CharacterEntity):
         # Reward progress toward goal more uniformly
         current_distance = self.heuristic(state, goal)
         next_distance = self.heuristic(next_state, goal)
-        reward += (current_distance - next_distance) * 3
+        reward += (current_distance - next_distance) * 40
+        
+        # Time penalty (small negative reward each step)
+        reward -= 10 # Penalize taking time
         
         # Simple event-based rewards
         for event in events:
             if event.tpe == Event.CHARACTER_KILLED_BY_MONSTER:
-                reward -= 100
+                reward -= 800  # Increased death penalty
             elif event.tpe == Event.BOMB_HIT_CHARACTER:
-                reward -= 100
+                reward -= 800  # Increased death penalty
             elif event.tpe == Event.CHARACTER_FOUND_EXIT:
-                reward += 200
+                # Base reward for winning
+                reward += 15000
+                
+                # Bonus reward based on steps taken (more steps = less bonus)
+                time_bonus = max(500 - self.steps, 0)  # Starts at 500, decreases with steps
+                reward += time_bonus
+                
             elif event.tpe == Event.BOMB_HIT_MONSTER:
-                reward += 30
+                reward += 100  # Increased monster kill reward
             elif event.tpe == Event.BOMB_HIT_WALL:
-                reward += 5
+                # Only reward wall destruction if it's between us and the goal
+                if self.is_wall_blocking_path(wrld, state, goal):
+                    reward += 300
+                else:
+                    reward += 10
+
+            if place_bomb:
+                reward -= 100
         
         return reward
+
+    def is_wall_blocking_path(self, wrld, state, goal):
+        """Check if destroying this wall is the first one in a complete horizontal wall"""
+        x, y = state
+        
+        # Count walls in this row
+        wall_count = 0
+        for check_x in range(wrld.width()):
+            if wrld.wall_at(check_x, y):
+                wall_count += 1
+                
+        # If this was the first wall destroyed in a complete row
+        # (wall_count + 1 because the wall we just destroyed isn't counted)
+        if wall_count + 1 == wrld.width():
+            return True
+            
+        return False
 
 ### FEATURES AND HELPER FUNCTIONS
 
@@ -510,7 +582,6 @@ class TestCharacter(CharacterEntity):
                 'target_network': self.target_network.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'epsilon': self.epsilon,
-                'steps': self.steps,
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             
@@ -569,7 +640,6 @@ class TestCharacter(CharacterEntity):
                 self.target_network.load_state_dict(checkpoint['target_network'])
                 self.optimizer.load_state_dict(checkpoint['optimizer'])
                 self.epsilon = checkpoint['epsilon']
-                self.steps = checkpoint['steps']
                 
                 print(f"✅ Model loaded successfully (saved on {checkpoint.get('timestamp', 'unknown date')})")
                 print(f"   → Epsilon: {self.epsilon:.4f}, Steps: {self.steps}")
@@ -604,6 +674,55 @@ class TestCharacter(CharacterEntity):
             print("⚠️ Starting with a new model")
             return False
 
+    def is_clear_path_to_exit(self, wrld):
+        """Check if there's a clear path to the exit using A*"""
+        goal = (wrld.width() - 1, wrld.height() - 1)
+        start = (self.x, self.y)
+        
+        # A* implementation
+        def heuristic(a, b):
+            return abs(b[0] - a[0]) + abs(b[1] - a[1])
+        
+        def get_neighbors(pos):
+            x, y = pos
+            neighbors = []
+            for dx, dy in [(0,1), (1,0), (0,-1), (-1,0), (1,1), (-1,-1), (1,-1), (-1,1)]:
+                nx, ny = x + dx, y + dy
+                if (0 <= nx < wrld.width() and 0 <= ny < wrld.height() and
+                    not wrld.wall_at(nx, ny) and
+                    not any(wrld.monsters_at(mx, my) 
+                           for mx, my in self.get_neighbors(wrld, (nx, ny), include_diagonal=True))):
+                    neighbors.append((nx, ny))
+            return neighbors
+        
+        # A* algorithm
+        frontier = []
+        heapq.heappush(frontier, (0, start))
+        came_from = {start: None}
+        cost_so_far = {start: 0}
+        
+        while frontier:
+            current = heapq.heappop(frontier)[1]
+            
+            if current == goal:
+                # Reconstruct path
+                path = []
+                while current != start:
+                    path.append(current)
+                    current = came_from[current]
+                path.reverse()
+                return True, path
+            
+            for next_pos in get_neighbors(current):
+                new_cost = cost_so_far[current] + 1
+                if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
+                    cost_so_far[next_pos] = new_cost
+                    priority = new_cost + heuristic(goal, next_pos)
+                    heapq.heappush(frontier, (priority, next_pos))
+                    came_from[next_pos] = current
+        
+        return False, []
+
 
 def exit_handler():
     """Save the model and log training metrics when the program exits"""
@@ -623,19 +742,9 @@ def exit_handler():
                 
                 for event in testcharacter_instance.last_events:
                     event_str = str(event.tpe)
-                    
-                    # Handle numeric event types
-                    if event_str == '4':  # CHARACTER_FOUND_EXIT
-                        outcome = "win"
-                        break
-                    elif event_str == '3':  # CHARACTER_KILLED_BY_MONSTER
-                        outcome = "killed_by_monster"
-                        break
-                    elif event_str == '7':  # BOMB_HIT_CHARACTER
-                        outcome = "killed_by_bomb"
-                        break
+
                     # Also check string representations as fallback
-                    elif "found the exit" in str(event).lower():
+                    if "found" in str(event).lower():
                         outcome = "win"
                         break
                     elif "killed by monster" in str(event).lower():
