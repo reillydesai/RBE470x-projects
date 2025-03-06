@@ -78,13 +78,19 @@ def train_on_world(variant_file, num_games=5):
     return stats
 
 def main():
-    total_games = 25  # Total games to play
-    games_per_world = total_games // len(worlds)
+    num_rounds = 5  # Number of rounds to train (you can modify this)
     
-    print(f"Training on {len(worlds)} worlds, {games_per_world} games each")
+    print(f"Training for {num_rounds} rounds on {len(worlds)} worlds")
     
-    # Store stats for each variant
-    variant_stats = {}
+    # Store stats for each variant and overall
+    variant_stats = {world: {
+        'wins': 0,
+        'monster_deaths': 0,
+        'explosion_deaths': 0,
+        'timeouts': 0,
+        'total_score': 0
+    } for world in worlds.keys()}
+    
     total_stats = {
         'wins': 0,
         'monster_deaths': 0,
@@ -93,26 +99,36 @@ def main():
         'total_score': 0
     }
     
-    # Train on each world
-    for world_name, variant_file in worlds.items():
-        print(f"\nTraining on {world_name}")
-        stats = train_on_world(variant_file, games_per_world)
-        variant_stats[world_name] = stats
+    # Train for specified number of rounds
+    for round_num in range(num_rounds):
+        print(f"\n=== Starting Round {round_num + 1}/{num_rounds} ===")
         
-        # Accumulate statistics
-        for key in total_stats:
-            total_stats[key] += stats[key]
+        # Train on each world in order
+        for world_name, variant_file in worlds.items():
+            print(f"\nTraining on {world_name}")
+            stats = train_on_world(variant_file, num_games=1)  # One game per variant per round
+            
+            # Accumulate statistics for this variant
+            for key in stats:
+                variant_stats[world_name][key] += stats[key]
+                total_stats[key] += stats[key]
+        
+        # Print progress after each round
+        print(f"\n--- Round {round_num + 1} Complete ---")
+        print(f"Current Win Rate: {total_stats['wins']/((round_num + 1) * len(worlds)):.2%}")
     
     # Print final results for each variant
     print("\n=== Final Results ===")
     print("\nResults by Variant:")
+    total_games_per_variant = num_rounds
     for world_name, stats in variant_stats.items():
         print(f"\n{world_name}:")
-        print(f"Wins: {stats['wins']}/{games_per_world} ({stats['wins']/games_per_world:.2%})")
-        print(f"Deaths by monster: {stats['monster_deaths']}/{games_per_world} ({stats['monster_deaths']/games_per_world:.2%})")
-        print(f"Deaths by explosion: {stats['explosion_deaths']}/{games_per_world} ({stats['explosion_deaths']/games_per_world:.2%})")
-        print(f"Timeouts: {stats['timeouts']}/{games_per_world} ({stats['timeouts']/games_per_world:.2%})")
-        
+        print(f"Wins: {stats['wins']}/{total_games_per_variant} ({stats['wins']/total_games_per_variant:.2%})")
+        print(f"Deaths by monster: {stats['monster_deaths']}/{total_games_per_variant} ({stats['monster_deaths']/total_games_per_variant:.2%})")
+        print(f"Deaths by explosion: {stats['explosion_deaths']}/{total_games_per_variant} ({stats['explosion_deaths']/total_games_per_variant:.2%})")
+        print(f"Timeouts: {stats['timeouts']}/{total_games_per_variant} ({stats['timeouts']/total_games_per_variant:.2%})")
+    
+    total_games = num_rounds * len(worlds)
     print("\nOverall Results:")
     print(f"Total Wins: {total_stats['wins']}/{total_games} ({total_stats['wins']/total_games:.2%})")
     print(f"Total Deaths by monster: {total_stats['monster_deaths']}/{total_games} ({total_stats['monster_deaths']/total_games:.2%})")

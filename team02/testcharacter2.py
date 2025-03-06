@@ -303,6 +303,9 @@ class TestCharacter(CharacterEntity):
 
     def do(self, wrld):
         """Main game loop with time-based autosave"""
+        # Initialize events as empty list by default
+        events = []
+        
         # Auto-save model based on time
         current_time = datetime.now()
         time_diff = (current_time - self.last_save_time).total_seconds()
@@ -315,11 +318,13 @@ class TestCharacter(CharacterEntity):
         # Get current state
         state = self.get_state_features(wrld)
         if state is None:
+            self.last_events = events  # Store empty events list
             return
             
         # Get possible actions
         actions, valid_indices = self.get_possible_actions(wrld, (self.x, self.y))
         if not actions:  # If no valid actions available
+            self.last_events = events  # Store empty events list
             return
             
         # Choose action (ε-greedy)
@@ -346,6 +351,11 @@ class TestCharacter(CharacterEntity):
         
         # Get new state and reward
         new_wrld, events = wrld.next()
+        
+        # Store the events for logging with debug print
+        self.last_events = events
+        print(f"🎮 Current events: {[str(e.tpe) for e in events]}")  # Debug print
+        
         next_state = self.get_state_features(new_wrld)
         reward = self.get_reward(wrld, (self.x, self.y), (direction, place_bomb), 
                                (self.x + direction[0], self.y + direction[1]), events)
@@ -383,14 +393,6 @@ class TestCharacter(CharacterEntity):
             self.save_model()
             self.last_save_time = datetime.now()
 
-    # Helper methods from testcharacter.py
-    def calculate_danger_grid(self, wrld):
-        # ... (copy from testcharacter.py)
-        pass
-
-    def calculate_bomb_grid(self, wrld):
-        # ... (copy from testcharacter.py)
-        pass
 
     def is_valid_move(self, wrld, state, action):
         """Check if a move is valid and safe"""
@@ -663,11 +665,28 @@ def exit_handler():
             
             # Log training metrics in JSONL format
             log_path = os.path.join(os.path.dirname(testcharacter_instance.model_path), "training_log.jsonl")
+            
+            # Determine outcome from last event
+            outcome = "unknown"
+            
+            if hasattr(testcharacter_instance, 'last_events'):
+                for event in reversed(testcharacter_instance.last_events):
+                    if event.tpe == Event.CHARACTER_FOUND_EXIT:
+                        outcome = "win"
+                        break
+                    elif event.tpe == Event.CHARACTER_KILLED_BY_MONSTER:
+                        outcome = "killed_by_monster"
+                        break
+                    elif event.tpe == Event.BOMB_HIT_CHARACTER:
+                        outcome = "killed_by_bomb"
+                        break
+            
             log_entry = {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "epsilon": float(testcharacter_instance.epsilon),
                 "steps": int(testcharacter_instance.steps),
-                "total_reward": float(testcharacter_instance.total_reward)
+                "total_reward": float(testcharacter_instance.total_reward),
+                "outcome": outcome
             }
             
             # Append the JSON line to the log file
