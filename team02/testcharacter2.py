@@ -1,54 +1,56 @@
-# This is necessary to find the main code
+# Import section
 import sys
-sys.path.insert(0, '../bomberman')
+sys.path.insert(0, '../bomberman')  # Adds the bomberman directory to Python's path for imports
 
-# Import necessary stuff
-from entity import CharacterEntity
-from events import Event
+# Import game-related classes
+from entity import CharacterEntity  # Base class for characters
+from events import Event  # Event handling
 
-# Neural network imports
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import numpy as np
-from collections import deque
-import random
-import os
-from datetime import datetime
-import atexit
-import json
+# Neural network related imports
+import torch  # Main PyTorch library
+import torch.nn as nn  # Neural network modules
+import torch.optim as optim  # Optimization algorithms
+import torch.nn.functional as F  # Neural network functions
+import numpy as np  # Numerical operations
+from collections import deque  # For experience replay buffer
+import random  # For random actions
+import os  # File operations
+from datetime import datetime  # Time tracking
+import atexit  # Register exit handler
+import json  # JSON handling for logging
 
-
+# Define the neural network architecture
 class DQNetwork(nn.Module):
     """Neural network for Deep Q-learning"""
     def __init__(self, input_size, hidden_size, output_size):
         super(DQNetwork, self).__init__()
+        # Sequential network with 2 hidden layers
         self.network = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, output_size)
+            nn.Linear(input_size, hidden_size),  # Input layer → Hidden layer 1
+            nn.ReLU(),  # Activation function
+            nn.Linear(hidden_size, hidden_size),  # Hidden layer 1 → Hidden layer 2
+            nn.ReLU(),  # Activation function
+            nn.Linear(hidden_size, output_size)  # Hidden layer 2 → Output layer
         )
     
     def forward(self, x):
-        return self.network(x)
+        return self.network(x)  # Process input through network
 
+# Main character class
 class TestCharacter(CharacterEntity):
     def __init__(self, name, avatar, x=0, y=0):
-        super().__init__(name, avatar, x, y)
+        super().__init__(name, avatar, x, y)  # Initialize parent class
         
-        # Set absolute path for model save
+        # Set up model saving path
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.model_path = os.path.join(script_dir, "trained_model.pth")
         
-        # Print full path and check for access
+        # Debug prints for file access
         print(f"Model path: {os.path.abspath(self.model_path)}")
         print(f"Directory exists: {os.path.exists(os.path.dirname(self.model_path))}")
         print(f"Directory writable: {os.access(os.path.dirname(self.model_path), os.W_OK)}")
         
-        # Define all possible actions
+        # Define all possible actions as (dx, dy, place_bomb)
         self.all_actions = [
             (0, 0, False), (0, 0, True),    # Stay in place
             (0, 1, False), (0, 1, True),    # Move up
@@ -61,42 +63,42 @@ class TestCharacter(CharacterEntity):
             (-1, 1, False), (-1, 1, True),  # Move up-left
         ]
         
-        # DQL Parameters
-        self.gamma = 0.99  # Discount factor
-        self.epsilon = 1.0  # Starting exploration rate
-        self.epsilon_min = 0.01  # Minimum exploration rate
-        self.epsilon_decay = 0.9999816  # Decay rate for epsilon for 250,000 steps (5000 steps per episode and 50 episodes)
-        self.learning_rate = 0.0005
-        self.batch_size = 32
+        # DQL Hyperparameters
+        self.gamma = 0.99  # Discount factor for future rewards
+        self.epsilon = 1.0  # Starting exploration rate (100% random actions)
+        self.epsilon_min = 0.01  # Minimum exploration rate (1% random actions)
+        self.epsilon_decay = 0.9999816  # How fast epsilon decreases
+        self.learning_rate = 0.0005  # Learning rate for optimizer
+        self.batch_size = 32  # Number of experiences to learn from at once
         
-        # State and action dimensions
-        self.state_size = 10  # We'll define our state features
-        self.action_size = 20  # 10 movements × 2 (bomb or no bomb)
+        # Network dimensions
+        self.state_size = 10  # Input features size
+        self.action_size = 20  # Number of possible actions
         
-        # Neural Networks (main and target)
-        self.main_network = DQNetwork(self.state_size, 64, self.action_size)
-        self.target_network = DQNetwork(self.state_size, 64, self.action_size)
-        self.target_network.load_state_dict(self.main_network.state_dict())
+        # Create neural networks
+        self.main_network = DQNetwork(self.state_size, 64, self.action_size)  # Main network
+        self.target_network = DQNetwork(self.state_size, 64, self.action_size)  # Target network
+        self.target_network.load_state_dict(self.main_network.state_dict())  # Copy weights
         
-        # Optimizer
+        # Set up optimizer
         self.optimizer = optim.Adam(self.main_network.parameters(), lr=self.learning_rate)
         
         # Experience replay buffer
-        self.memory = deque(maxlen=10000)
+        self.memory = deque(maxlen=10000)  # Store last 10000 experiences
         
-        # Additional tracking variables
-        self.steps = 0
+        # Training tracking variables
+        self.steps = 0  # Count of training steps
         self.update_target_every = 50  # Update target network every 50 steps
-        self.total_reward = 0.0  # Track total accumulated reward
-
-        # Attempt to load model right away
+        self.total_reward = 0.0  # Track cumulative reward
+        
+        # Try to load existing model
         loaded = self.load_model()
         if loaded:
             print("✅ Successfully loaded existing model")
         else:
             print("⚠️ Starting with a new model")
         
-        # Add autosave feature
+        # Set up autosave
         self.last_save_time = datetime.now()
         self.save_interval_seconds = 30  # Save every 30 seconds
 
@@ -164,8 +166,8 @@ class TestCharacter(CharacterEntity):
         self.total_reward += reward
         
         # Store experience
-        done = any(e.tpe == Event.CHARACTER_KILLED_BY_MONSTER or 
-                  e.tpe == Event.CHARACTER_FOUND_EXIT for e in events)
+        done = any(e.tpe == Event.CHARACTER_KILLED_BY_MONSTER or Event.CHARACTER_KILLED_BY_BOMB
+                  or e.tpe == Event.CHARACTER_FOUND_EXIT for e in events)
         
         # Ensure action_idx is within bounds
         action_idx = min(action_idx, self.action_size - 1)
@@ -188,8 +190,12 @@ class TestCharacter(CharacterEntity):
             print(f"🎯 Exit found! Saving model... Total reward: {self.total_reward:.2f}")
             self.save_model()
             self.last_save_time = datetime.now()
-        elif any(e.tpe == Event.BOMB_HIT_WALL for e in events):
-            print("💥 Wall destroyed! Saving model...")
+        elif any(e.tpe == Event.CHARACTER_KILLED_BY_MONSTER for e in events):
+            print("💥 Monster killed! Saving model...")
+            self.save_model()
+            self.last_save_time = datetime.now()
+        elif any(e.tpe == Event.CHARACTER_KILLED_BY_BOMB for e in events):
+            print("💥 Bomb killed! Saving model...")
             self.save_model()
             self.last_save_time = datetime.now()
 
@@ -369,10 +375,10 @@ class TestCharacter(CharacterEntity):
                     # Add the bomb's position
                     explosion_positions.add((x, y))
                     
-                    # Add positions in all four directions (up to 4 cells)
+                    # Add positions in all four directions (up to 6 cells)
                     directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
                     for dx, dy in directions:
-                        for i in range(1, 5):  # Range of 4 cells
+                        for i in range(1, 7):  # Range of 6 cells 
                             nx, ny = x + (dx * i), y + (dy * i)
                             if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
                                 if wrld.wall_at(nx, ny):
@@ -612,18 +618,41 @@ def exit_handler():
             
             # Determine outcome from last event
             outcome = "unknown"
-            
             if hasattr(testcharacter_instance, 'last_events'):
-                for event in reversed(testcharacter_instance.last_events):
-                    if event.tpe == Event.CHARACTER_FOUND_EXIT:
+                print(f"Final events: {testcharacter_instance.last_events}")  # Debug print
+                
+                for event in testcharacter_instance.last_events:
+                    event_str = str(event.tpe)
+                    
+                    # Handle numeric event types
+                    if event_str == '4':  # CHARACTER_FOUND_EXIT
                         outcome = "win"
                         break
-                    elif event.tpe == Event.CHARACTER_KILLED_BY_MONSTER:
+                    elif event_str == '3':  # CHARACTER_KILLED_BY_MONSTER
                         outcome = "killed_by_monster"
                         break
-                    elif event.tpe == Event.BOMB_HIT_CHARACTER:
+                    elif event_str == '7':  # BOMB_HIT_CHARACTER
                         outcome = "killed_by_bomb"
                         break
+                    # Also check string representations as fallback
+                    elif "found the exit" in str(event).lower():
+                        outcome = "win"
+                        break
+                    elif "killed by monster" in str(event).lower():
+                        outcome = "killed_by_monster"
+                        break
+                    elif "bomb hit character" in str(event).lower():
+                        outcome = "killed_by_bomb"
+                        break
+                    elif "game over" in str(event).lower() or "time" in str(event).lower():
+                        outcome = "timeout"
+                        break
+                
+                if outcome == "unknown":
+                    print("⚠️ Warning: Could not determine game outcome from events:", 
+                          [str(e.tpe) for e in testcharacter_instance.last_events])
+            else:
+                print("⚠️ Warning: No last_events found")
             
             log_entry = {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
