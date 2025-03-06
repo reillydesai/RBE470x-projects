@@ -10,10 +10,12 @@ from events import Event
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 import numpy as np
 from collections import deque
 import random
 import os
+from datetime import datetime
 
 class DQNetwork(nn.Module):
     """Neural network for Deep Q-learning"""
@@ -34,9 +36,14 @@ class TestCharacter(CharacterEntity):
     def __init__(self, name, avatar, x=0, y=0):
         super().__init__(name, avatar, x, y)
         
-        # Set absolute path for model save and print it
-        self.model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trained_model.pth")
-        print(f"Model path is: {self.model_path}")
+        # Set absolute path for model save
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.model_path = os.path.join(script_dir, "trained_model.pth")
+        
+        # Print full path and check for access
+        print(f"Model path: {os.path.abspath(self.model_path)}")
+        print(f"Directory exists: {os.path.exists(os.path.dirname(self.model_path))}")
+        print(f"Directory writable: {os.access(os.path.dirname(self.model_path), os.W_OK)}")
         
         # Define all possible actions
         self.all_actions = [
@@ -78,9 +85,16 @@ class TestCharacter(CharacterEntity):
         self.steps = 0
         self.update_target_every = 100  # Update target network every 100 steps 
 
-        # Load previously trained model if it exists
-        if os.path.exists(self.model_path):
-            self.load_model()
+        # Attempt to load model right away
+        loaded = self.load_model()
+        if loaded:
+            print("✅ Successfully loaded existing model")
+        else:
+            print("⚠️ Starting with a new model")
+        
+        # Add autosave feature
+        self.last_save_time = datetime.now()
+        self.save_interval_seconds = 30  # Save every 30 seconds
 
     def get_state_features(self, wrld):
         """Convert world state into a feature vector"""
@@ -182,15 +196,35 @@ class TestCharacter(CharacterEntity):
             self.target_network.load_state_dict(self.main_network.state_dict())
 
     def get_reward(self, wrld, state, action, next_state, events):
-        """Calculate reward for the given transition"""
+        """Calculate reward with stronger focus on vertical movement"""
         reward = 0
         x, y = next_state
         
-        # Base reward based on distance to goal
+        # Goal is always the bottom-right corner
         goal = (wrld.width() - 1, wrld.height() - 1)
+        
+        # Base reward based on distance to goal
         current_distance = self.heuristic(state, goal)
         next_distance = self.heuristic(next_state, goal)
         reward += (current_distance - next_distance) * 2
+        
+        # SPECIAL REWARD FOR VERTICAL PROGRESS
+        # Give extra reward for moving down (increasing y)
+        if next_state[1] > state[1]:
+            reward += 3.0  # Big bonus for moving down
+        elif next_state[1] < state[1]:
+            reward -= 2.0  # Penalty for moving up
+        
+        # Check if path to exit is clear
+        path_positions = self.get_path_positions((x, y), goal)
+        walls_in_path = sum(1 for px, py in path_positions if wrld.wall_at(px, py))
+        
+        # If path is clear, strongly reward moving toward exit
+        if walls_in_path == 0:
+            if next_distance < current_distance:
+                reward += 5.0
+            else:
+                reward -= 5.0
         
         # Penalties for being close to monsters
         monster_distance = self.get_closest_monster_distance(wrld, (x, y))
@@ -231,7 +265,16 @@ class TestCharacter(CharacterEntity):
         return reward
 
     def do(self, wrld):
-        """Main game loop"""
+        """Main game loop with time-based autosave"""
+        # Auto-save model based on time
+        current_time = datetime.now()
+        time_diff = (current_time - self.last_save_time).total_seconds()
+        
+        if time_diff >= self.save_interval_seconds:
+            print(f"⏰ Auto-saving model ({time_diff:.1f} seconds since last save)")
+            self.save_model()
+            self.last_save_time = current_time
+        
         # Get current state
         state = self.get_state_features(wrld)
         if state is None:
@@ -289,6 +332,16 @@ class TestCharacter(CharacterEntity):
         
         # Increment step counter
         self.steps += 1
+        
+        # Save model on important events
+        if any(e.tpe == Event.CHARACTER_FOUND_EXIT for e in events):
+            print("🎯 Exit found! Saving model...")
+            self.save_model()
+            self.last_save_time = datetime.now()
+        elif any(e.tpe == Event.BOMB_HIT_WALL for e in events):
+            print("💥 Wall destroyed! Saving model...")
+            self.save_model()
+            self.last_save_time = datetime.now()
 
     # Helper methods from testcharacter.py
     def calculate_danger_grid(self, wrld):
@@ -350,8 +403,19 @@ class TestCharacter(CharacterEntity):
         return neighbors
 
     def heuristic(self, pos, goal):
-        """Calculate Manhattan distance between two points"""
-        return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+        """
+        Prioritize y-coordinate movement (vertical) over x-coordinate movement
+        This helps the agent focus on getting past walls to reach the exit
+        """
+        x1, y1 = pos
+        x2, y2 = goal
+        
+        # Heavily weight y-distance (3x) compared to x-distance
+        y_weight = 3.0
+        x_weight = 1.0
+        
+        # Calculate weighted Manhattan distance
+        return x_weight * abs(x2 - x1) + y_weight * abs(y2 - y1)
 
     def get_explosion_positions(self, wrld):
         """Get all positions that are in range of bombs or current explosions"""
@@ -412,20 +476,110 @@ class TestCharacter(CharacterEntity):
                     
         return safe_neighbors
 
-
-
     def save_model(self):
-        """Save the trained model"""
-        print(f"Saving model to: {self.model_path}")
-        torch.save(self.main_network.state_dict(), self.model_path)
+        """Save the trained model with robust error handling"""
+        try:
+            print(f"💾 Attempting to save model to: {self.model_path}")
+            
+            # Save all necessary information
+            state = {
+                'main_network': self.main_network.state_dict(),
+                'target_network': self.target_network.state_dict(),
+                'optimizer': self.optimizer.state_dict(),
+                'epsilon': self.epsilon,
+                'steps': self.steps,
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
+            
+            # Save to temporary file first
+            temp_path = self.model_path + ".tmp"
+            torch.save(state, temp_path)
+            
+            # If successful, rename to actual file
+            if os.path.exists(temp_path):
+                if os.path.exists(self.model_path):
+                    os.remove(self.model_path)  # Remove existing file
+                os.rename(temp_path, self.model_path)
+                print(f"✅ Model successfully saved to {self.model_path}")
+                return True
+            else:
+                print("❌ Error: Temporary file not created")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error saving model: {e}")
+            
+            # Try alternative locations
+            try:
+                alt_paths = [
+                    os.path.join(os.getcwd(), "trained_model.pth"),
+                    "/tmp/bomberman_model.pth",
+                    os.path.expanduser("~/bomberman_model.pth")
+                ]
+                
+                for alt_path in alt_paths:
+                    try:
+                        print(f"📁 Trying alternative location: {alt_path}")
+                        torch.save(state, alt_path)
+                        print(f"✅ Model saved to alternative location: {alt_path}")
+                        return True
+                    except Exception as e2:
+                        print(f"❌ Failed to save to {alt_path}: {e2}")
+                        continue
+            except Exception as e3:
+                print(f"❌ Failed all save attempts: {e3}")
+            
+            return False
 
     def load_model(self):
-        """Load the trained model if it exists"""
-        if os.path.exists(self.model_path):
-            print(f"Loading model from: {self.model_path}")
-            self.main_network.load_state_dict(torch.load(self.model_path))
-            self.target_network.load_state_dict(self.main_network.state_dict())
-
+        """Load the trained model with robust error handling"""
+        try:
+            if os.path.exists(self.model_path):
+                print(f"📂 Loading model from: {self.model_path}")
+                checkpoint = torch.load(self.model_path)
+                
+                # Load all saved information
+                self.main_network.load_state_dict(checkpoint['main_network'])
+                self.target_network.load_state_dict(checkpoint['target_network'])
+                self.optimizer.load_state_dict(checkpoint['optimizer'])
+                self.epsilon = checkpoint['epsilon']
+                self.steps = checkpoint['steps']
+                
+                print(f"✅ Model loaded successfully (saved on {checkpoint.get('timestamp', 'unknown date')})")
+                print(f"   → Epsilon: {self.epsilon:.4f}, Steps: {self.steps}")
+                return True
+            else:
+                print(f"⚠️ No model found at {self.model_path}")
+                
+                # Try alternative locations
+                alt_paths = [
+                    os.path.join(os.getcwd(), "trained_model.pth"),
+                    "/tmp/bomberman_model.pth",
+                    os.path.expanduser("~/bomberman_model.pth")
+                ]
+                
+                for alt_path in alt_paths:
+                    if os.path.exists(alt_path):
+                        print(f"📁 Found model at alternative location: {alt_path}")
+                        checkpoint = torch.load(alt_path)
+                        self.main_network.load_state_dict(checkpoint['main_network'])
+                        self.target_network.load_state_dict(checkpoint['target_network'])
+                        self.optimizer.load_state_dict(checkpoint['optimizer'])
+                        self.epsilon = checkpoint['epsilon'] 
+                        self.steps = checkpoint['steps']
+                        print(f"✅ Model loaded from {alt_path}")
+                        return True
+                
+                print("⚠️ No model found in any location")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            print("⚠️ Starting with a new model")
+            return False
 
     def get_path_positions(self, start, goal):
         """Get positions along path to goal"""
@@ -454,3 +608,31 @@ class TestCharacter(CharacterEntity):
                   for mx, my in self.get_neighbors(wrld, (px, py), include_diagonal=True)):
                 return True
         return False 
+
+# Add this at the end of the file to force a save when the module is unloaded
+import atexit
+
+def exit_handler():
+    """Save the model when the program exits"""
+    print("🔚 Program exiting, saving model...")
+    # Since we can't access the character instance directly here,
+    # we'll create a hack to ensure the model is saved
+    try:
+        if 'testcharacter_instance' in globals() and testcharacter_instance is not None:
+            testcharacter_instance.save_model()
+    except:
+        pass
+
+atexit.register(exit_handler)
+
+# This will be set by the first instance created
+testcharacter_instance = None
+
+# Override the constructor to track the instance
+original_init = TestCharacter.__init__
+def new_init(self, *args, **kwargs):
+    original_init(self, *args, **kwargs)
+    global testcharacter_instance
+    testcharacter_instance = self
+    
+TestCharacter.__init__ = new_init 

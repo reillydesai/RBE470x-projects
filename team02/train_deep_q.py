@@ -13,7 +13,7 @@ worlds = {
     "variant5": "variant5.py"
 }
 
-def train_on_world(variant_file, num_games=2):
+def train_on_world(variant_file, num_games=5):
     """Train agent on a specific world variant"""
     stats = {
         'wins': 0,
@@ -52,7 +52,7 @@ def train_on_world(variant_file, num_games=2):
             if "exit" in output:
                 stats['wins'] += 1
                 print(f"Game {i}: Won!")
-            elif "self" in output:
+            elif "self" in output and not "selfp" in output:
                 stats['explosion_deaths'] += 1
                 print(f"Game {i}: Killed by bomb")
             elif "killed" in output:
@@ -78,7 +78,7 @@ def train_on_world(variant_file, num_games=2):
     return stats
 
 def main():
-    total_games = 10  # Total games to play
+    total_games = 25  # Total games to play
     games_per_world = total_games // len(worlds)
     
     print(f"Training on {len(worlds)} worlds, {games_per_world} games each")
