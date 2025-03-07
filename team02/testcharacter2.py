@@ -19,6 +19,7 @@ from datetime import datetime  # Time tracking
 import atexit  # Register exit handler
 import json  # JSON handling for logging
 import heapq  # Add this with other imports
+from per import PrioritizedReplayBuffer
 
 # Define the neural network architecture
 class DQNetwork(nn.Module):
@@ -85,7 +86,10 @@ class TestCharacter(CharacterEntity):
         self.optimizer = optim.Adam(self.main_network.parameters(), lr=self.learning_rate)
         
         # Experience replay buffer
-        self.memory = deque(maxlen=10000)  # Store last 10000 experiences
+        self.memory = PrioritizedReplayBuffer(capacity=10000, 
+                                            alpha=0.6,  # How much prioritization to use (0=none, 1=full)
+                                            beta=0.4,   # Starting importance sampling weight (0.4 to 1.0)
+                                            beta_increment=0.00001)  # How fast to increase beta
         
         # Training tracking variables
         self.steps = 0  # Count of training steps
@@ -550,50 +554,53 @@ class TestCharacter(CharacterEntity):
 ### TRAINING & LOGGING HELPERS
 
     def store_experience(self, state, action_idx, reward, next_state, done):
-        """Store transition in replay memory"""
-        if state is not None:  # Only check if current state is valid
-            # For terminal states (done=True), next_state can be None
+        """Store transition in prioritized replay memory"""
+        if state is not None:
             if next_state is None:
-                next_state = torch.zeros_like(state)  # Zero tensor for terminal states
-            self.memory.append((state, action_idx, reward, next_state, done))
+                next_state = torch.zeros_like(state)
+            # Store with default priority (max priority)
+            self.memory.add((state, action_idx, reward, next_state, done))
 
     def train_network(self):
-        """Train the network using a batch from replay memory"""
+        """Train the network using prioritized experience replay"""
         if len(self.memory) < self.batch_size:
             return
             
-        # Sample random batch
-        batch = random.sample(self.memory, self.batch_size)
+        # Sample batch with priorities and get importance sampling weights
+        batch, indices, weights = self.memory.sample(self.batch_size)
         
         # Prepare batch tensors
-        states = torch.stack([s for s, _, _, _, _ in batch])
-        next_states = torch.stack([ns for _, _, _, ns, _ in batch])
-        actions = torch.LongTensor([a for _, a, _, _, _ in batch])
-        rewards = torch.FloatTensor([r for _, _, r, _, _ in batch])
-        dones = torch.FloatTensor([d for _, _, _, _, d in batch])
+        states = torch.stack([s[0] for s in batch])
+        actions = torch.LongTensor([s[1] for s in batch])
+        rewards = torch.FloatTensor([s[2] for s in batch])
+        next_states = torch.stack([s[3] for s in batch])
+        dones = torch.FloatTensor([s[4] for s in batch])
         
         # Get current Q values
         current_q = self.main_network(states).gather(1, actions.unsqueeze(1))
         
-        # Get next Q values from target network
-        next_q = self.target_network(next_states).max(1)[0].detach()
-        target_q = rewards + (1 - dones) * self.gamma * next_q
-        
-        # Compute loss and update main network
-        loss = nn.MSELoss()(current_q.squeeze(), target_q)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-
-        #Implement double DQN
+        # Get next Q values using double DQN method
         with torch.no_grad():
             # Main network selects actions
             next_action_indices = self.main_network(next_states).argmax(dim=1, keepdim=True)
             # Target network evaluates those actions
             next_q_values = self.target_network(next_states).gather(1, next_action_indices).squeeze()
             target_q = rewards + (1 - dones) * self.gamma * next_q_values
-
+        
+        # Calculate TD errors (for updating priorities)
+        td_errors = (target_q - current_q.squeeze()).detach()
+        
+        # Apply importance sampling weights to loss
+        loss = (weights * F.mse_loss(current_q.squeeze(), target_q, reduction='none')).mean()
+        
+        # Optimize the model
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        # Update priorities in replay buffer using TD errors
+        self.memory.update_priorities(indices, td_errors.abs().detach().cpu().numpy())
+        
     def update_target_network(self):
         """Update target network weights"""
         if self.steps % self.update_target_every == 0:
@@ -610,7 +617,9 @@ class TestCharacter(CharacterEntity):
                 'target_network': self.target_network.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'epsilon': self.epsilon,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                # Add PER parameters to save
+                'beta': self.memory.beta
             }
             
             # Create directory if it doesn't exist
@@ -668,6 +677,10 @@ class TestCharacter(CharacterEntity):
                 self.target_network.load_state_dict(checkpoint['target_network'])
                 self.optimizer.load_state_dict(checkpoint['optimizer'])
                 self.epsilon = checkpoint['epsilon']
+                
+                # Load PER parameters if they exist in the checkpoint
+                if 'beta' in checkpoint:
+                    self.memory.beta = checkpoint['beta']
                 
                 print(f"✅ Model loaded successfully (saved on {checkpoint.get('timestamp', 'unknown date')})")
                 print(f"   → Epsilon: {self.epsilon:.4f}, Steps: {self.steps}")
