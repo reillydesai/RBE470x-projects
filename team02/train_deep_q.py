@@ -78,7 +78,7 @@ def train_on_world(variant_file, num_games=5):
     return stats
 
 def main():
-    num_rounds = 5  # Number of rounds to train (you can modify this)
+    num_rounds = 300  # Number of rounds to train (you can modify this)
     
     print(f"Training for {num_rounds} rounds on {len(worlds)} worlds")
     
