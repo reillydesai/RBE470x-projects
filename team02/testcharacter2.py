@@ -19,7 +19,6 @@ from datetime import datetime  # Time tracking
 import atexit  # Register exit handler
 import json  # JSON handling for logging
 import heapq  # Add this with other imports
-from prioritized_replay_buffer import PrioritizedReplayBuffer
 
 # Define the neural network architecture
 class DQNetwork(nn.Module):
@@ -69,7 +68,7 @@ class TestCharacter(CharacterEntity):
         self.gamma = 0.99  # Discount factor for future rewards
         self.epsilon = 1.0  # Starting exploration rate (100% random actions)
         self.epsilon_min = 0.01  # Minimum exploration rate (1% random actions)
-        self.epsilon_decay = 0.9999845  # How fast epsilon decreases
+        self.epsilon_decay = 0.99998845  # How fast epsilon decreases
         self.learning_rate = 0.0005  # Learning rate for optimizer
         self.batch_size = 32  # Number of experiences to learn from at once
         
@@ -85,13 +84,12 @@ class TestCharacter(CharacterEntity):
         # Set up optimizer
         self.optimizer = optim.Adam(self.main_network.parameters(), lr=self.learning_rate)
         
-        # Initialize the prioritized replay buffer
-        self.memory = PrioritizedReplayBuffer(capacity=10000)  # Set capacity as needed
+        # Experience replay buffer
+        self.memory = deque(maxlen=10000)  # Store last 10000 experiences
         
         # Training tracking variables
         self.steps = 0  # Count of training steps
-        self.training_interval = 50    
-        self.update_target_every = 100  # Update target network every 50 steps
+        self.update_target_every = 50  # Update target network every 50 steps
         self.total_reward = 0.0  # Track cumulative reward
         
         # Try to load existing model
@@ -109,65 +107,66 @@ class TestCharacter(CharacterEntity):
     def do(self, wrld):
         """Main game loop with A* override"""
 
-        print("steps: ", self.steps)
+        print("steps: ",self.steps)
         # Check for clear path to exit
         clear_path_exists, path = self.is_clear_path_to_exit(wrld)
-
+        
         if clear_path_exists and path:
             # Use A* path
             next_pos = path[0]
             dx = next_pos[0] - self.x
             dy = next_pos[1] - self.y
-
+            
             # Store current state for reward calculation
             current_state = (self.x, self.y)
-
+            
             # Don't place bombs when we have a clear path
             self.move(dx, dy)
-
+            
             # Get events after movement
             new_wrld, events = wrld.next()
             self.last_events = events
-
+            
             # Calculate reward including win condition
             reward = 200  # Base reward for following optimal path
-
+            
             # Use the regular reward function to ensure we get win rewards
             reward += self.get_reward(wrld, current_state, ((dx, dy), False), 
-                                       (self.x, self.y), events)
-
+                                    (self.x, self.y), events)
+            
             # Update total reward
             self.total_reward += reward
-
+            
             # Increment step counter
             self.steps += 1
-
+            
             return
-
+            
         # If no clear path, continue with normal DQN behavior
+        # Initialize events as empty list by default
         events = []
-
+        
         # Auto-save model based on time
         current_time = datetime.now()
         time_diff = (current_time - self.last_save_time).total_seconds()
-
+        
         if time_diff >= self.save_interval_seconds:
             print(f"⏰ Auto-saving model ({time_diff:.1f} seconds since last save)")
             self.save_model()
             self.last_save_time = current_time
-
+        
         # Get current state
         state = self.get_state_features(wrld)
         if state is None:
             self.last_events = events  # Store empty events list
             return
-
+            
         # Get possible actions
         actions, valid_indices = self.get_possible_actions(wrld, (self.x, self.y))
         if not actions:  # If no valid actions available
             self.last_events = events  # Store empty events list
             return
-
+            
         # Choose action (ε-greedy)
         if random.random() < self.epsilon:
             # Choose a random action from available actions
@@ -181,48 +180,49 @@ class TestCharacter(CharacterEntity):
                 best_valid_idx = valid_q.argmax().item()
                 action_idx = valid_indices[best_valid_idx]
                 action_pair = actions[valid_indices.index(action_idx)]
-
+        
         # Extract direction and bomb decision
         direction, place_bomb = action_pair
-
+        
         # Execute action
         if place_bomb:
             self.place_bomb()
         self.move(direction[0], direction[1])
-
+        
         # Get new state and reward
         new_wrld, events = wrld.next()
-
+        
         # Store the events for logging with debug print
         self.last_events = events
         print(f"🎮 Current events: {[str(e.tpe) for e in events]}")  # Debug print
-
+        
         next_state = self.get_state_features(new_wrld)
         reward = self.get_reward(wrld, (self.x, self.y), (direction, place_bomb), 
-                                 (self.x + direction[0], self.y + direction[1]), events)
-
+                               (self.x + direction[0], self.y + direction[1]), events)
+        
         # Update total reward
         self.total_reward += reward
-
+        
         # Store experience
         done = any(e.tpe == Event.CHARACTER_KILLED_BY_MONSTER or Event.BOMB_HIT_CHARACTER
-                   or e.tpe == Event.CHARACTER_FOUND_EXIT for e in events)
-
+                  or e.tpe == Event.CHARACTER_FOUND_EXIT for e in events)
+        
         # Ensure action_idx is within bounds
         action_idx = min(action_idx, self.action_size - 1)
         self.store_experience(state, action_idx, reward, next_state, done)
-
-        # Train network periodically
-        if self.steps % self.training_interval == 0:  # Train every 'training_interval' steps
-            self.train_network()
-
+        
+        # Train network
+        self.train_network()
+        
         # Update target network periodically
-        if self.steps % self.update_target_every == 0:  # Update every 'update_target_every' steps
-            self.update_target_network()
-
+        self.update_target_network()
+        
+        # Decay epsilon
+        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+        
         # Increment step counter
         self.steps += 1
-
+        
         # Save model on important events
         if any(e.tpe == Event.CHARACTER_FOUND_EXIT for e in events):
             print(f"🎯 Exit found! Saving model... Total reward: {self.total_reward:.2f}")
@@ -236,11 +236,6 @@ class TestCharacter(CharacterEntity):
             print("💥 Bomb killed! Saving model...")
             self.save_model()
             self.last_save_time = datetime.now()
-
-        # Train the network at the end of the game
-        if done:
-            self.train_network()  # Call to train the network at the end of the game
-            self.update_target_network()  # Update target network at the end of the game
 
 ## ACTIONS
 
@@ -560,40 +555,44 @@ class TestCharacter(CharacterEntity):
             # For terminal states (done=True), next_state can be None
             if next_state is None:
                 next_state = torch.zeros_like(state)  # Zero tensor for terminal states
-            self.memory.push((state, action_idx, reward, next_state, done))  # Use the new buffer
+            self.memory.append((state, action_idx, reward, next_state, done))
 
     def train_network(self):
         """Train the network using a batch from replay memory"""
-        if len(self.memory.buffer) < self.batch_size:
+        if len(self.memory) < self.batch_size:
             return
-
-        # Sample experiences from the prioritized replay buffer
-        experiences, indices, weights = self.memory.sample(self.batch_size)
-
+            
+        # Sample random batch
+        batch = random.sample(self.memory, self.batch_size)
+        
         # Prepare batch tensors
-        states = torch.stack([s for s, _, _, _, _ in experiences])
-        next_states = torch.stack([ns for _, _, _, ns, _ in experiences])
-        actions = torch.LongTensor([a for _, a, _, _, _ in experiences])
-        rewards = torch.FloatTensor([r for _, _, r, _, _ in experiences])
-        dones = torch.FloatTensor([d for _, _, _, _, d in experiences])
-
-        # Get current Q values from the main network
+        states = torch.stack([s for s, _, _, _, _ in batch])
+        next_states = torch.stack([ns for _, _, _, ns, _ in batch])
+        actions = torch.LongTensor([a for _, a, _, _, _ in batch])
+        rewards = torch.FloatTensor([r for _, _, r, _, _ in batch])
+        dones = torch.FloatTensor([d for _, _, _, _, d in batch])
+        
+        # Get current Q values
         current_q = self.main_network(states).gather(1, actions.unsqueeze(1))
-
-        # Get next Q values from the target network
-        next_actions = self.main_network(next_states).argmax(1).unsqueeze(1)  # Select actions using the main network
-        next_q = self.target_network(next_states).gather(1, next_actions).detach()  # Evaluate using the target network
+        
+        # Get next Q values from target network
+        next_q = self.target_network(next_states).max(1)[0].detach()
         target_q = rewards + (1 - dones) * self.gamma * next_q
-
+        
         # Compute loss and update main network
         loss = nn.MSELoss()(current_q.squeeze(), target_q)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-        # Update priorities based on TD error (you need to implement this)
-        td_errors = target_q - current_q.squeeze()  # Calculate TD errors
-        self.memory.update_priorities(indices, td_errors.detach().numpy())
+
+        #Implement double DQN
+        with torch.no_grad():
+            # Main network selects actions
+            next_action_indices = self.main_network(next_states).argmax(dim=1, keepdim=True)
+            # Target network evaluates those actions
+            next_q_values = self.target_network(next_states).gather(1, next_action_indices).squeeze()
+            target_q = rewards + (1 - dones) * self.gamma * next_q_values
 
     def update_target_network(self):
         """Update target network weights"""

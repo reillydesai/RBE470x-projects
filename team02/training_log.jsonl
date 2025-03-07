@@ -6,3 +6,5 @@
 {"timestamp": "2025-03-07 16:22:28", "epsilon": 1.0, "steps": 47, "total_reward": -4290.0, "outcome": "unknown"}
 {"timestamp": "2025-03-07 16:23:19", "epsilon": 1.0, "steps": 41, "total_reward": -10050.0, "outcome": "unknown"}
 {"timestamp": "2025-03-07 16:23:22", "epsilon": 1.0, "steps": 48, "total_reward": -500.0, "outcome": "unknown"}
+{"timestamp": "2025-03-07 16:26:42", "epsilon": 0.994850424941519, "steps": 456, "total_reward": -32615.0, "outcome": "win"}
+{"timestamp": "2025-03-07 16:26:48", "epsilon": 0.9925664236291062, "steps": 199, "total_reward": -24805.0, "outcome": "unknown"}
