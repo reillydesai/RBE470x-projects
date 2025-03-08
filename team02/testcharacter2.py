@@ -93,7 +93,8 @@ class TestCharacter(CharacterEntity):
         
         # Training tracking variables
         self.steps = 0  # Count of training steps
-        self.update_target_every = 50  # Update target network every 50 steps
+        self.update_target_every = 100  # Update target network every 50 steps
+        self.update_network_every = 50  # Update network every 1 step
         self.total_reward = 0.0  # Track cumulative reward
         
         # Try to load existing model
@@ -112,6 +113,7 @@ class TestCharacter(CharacterEntity):
         """Main game loop with A* override"""
 
         print("steps: ",self.steps)
+        print("reward: ", self.total_reward)
         # Check for clear path to exit
         clear_path_exists, path = self.is_clear_path_to_exit(wrld)
         
@@ -318,10 +320,10 @@ class TestCharacter(CharacterEntity):
         # Simple event-based rewards
         for event in events:
             if event.tpe == Event.CHARACTER_KILLED_BY_MONSTER:
-                reward -= 2000  # Increased death penalty
-            elif event.tpe == Event.BOMB_HIT_CHARACTER:
+                reward -= 5000  # Increased death penalty
+            # elif event.tpe == Event.BOMB_HIT_CHARACTER:
                 reward -= 3000  # Increased death penalty
-            elif event.tpe == Event.CHARACTER_FOUND_EXIT:
+            if event.tpe == Event.CHARACTER_FOUND_EXIT:
                 # Base reward for winning
                 reward += 25000
                 
@@ -338,8 +340,8 @@ class TestCharacter(CharacterEntity):
                 else:
                     reward += 10
 
-            if place_bomb:
-                reward -= 300
+        # if place_bomb:
+        #     reward -= 300
 
             
         
@@ -562,6 +564,9 @@ class TestCharacter(CharacterEntity):
             self.memory.add((state, action_idx, reward, next_state, done))
 
     def train_network(self):
+        if self.steps % self.update_network_every != 0:
+            return
+        # Implement double DQN with PER
         """Train the network using prioritized experience replay"""
         if len(self.memory) < self.batch_size:
             return
