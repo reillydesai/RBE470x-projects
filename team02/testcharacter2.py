@@ -93,8 +93,8 @@ class TestCharacter(CharacterEntity):
         
         # Training tracking variables
         self.steps = 0  # Count of training steps
-        self.update_target_every = 100  # Update target network every 50 steps
-        self.update_network_every = 50  # Update network every 1 step
+        self.update_target_every = 500  # Update target network every 50 steps
+        self.update_network_every = 5  # Update network every 1 step
         self.total_reward = 0.0  # Track cumulative reward
         
         # Try to load existing model
@@ -606,9 +606,9 @@ class TestCharacter(CharacterEntity):
         # Update priorities in replay buffer using TD errors
         self.memory.update_priorities(indices, td_errors.abs().detach().cpu().numpy())
         
-    def update_target_network(self):
+    def update_target_network(self, force=False):
         """Update target network weights"""
-        if self.steps % self.update_target_every == 0:
+        if self.steps % self.update_target_every == 0 or force:
             self.target_network.load_state_dict(self.main_network.state_dict())
 
     def save_model(self):
@@ -770,13 +770,16 @@ class TestCharacter(CharacterEntity):
         return False, []
 
 
-def exit_handler():
+def exit_handler(self):
     """Save the model and log training metrics when the program exits"""
     print("🔚 Program exiting, saving model...")
     try:
         if 'testcharacter_instance' in globals() and testcharacter_instance is not None:
             # Save the model
             testcharacter_instance.save_model()
+
+            # Update target network periodically
+            self.update_target_network(True)
             
             # Log training metrics in JSONL format
             log_path = os.path.join(os.path.dirname(testcharacter_instance.model_path), "training_log.jsonl")
