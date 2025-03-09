@@ -69,8 +69,8 @@ class TestCharacter(CharacterEntity):
         self.gamma = 0.99  # Discount factor for future rewards
         self.epsilon = 1.0  # Starting exploration rate (100% random actions)
         self.epsilon_min = 0.01  # Minimum exploration rate (1% random actions)
-        self.epsilon_decay = 0.99998845  # How fast epsilon decreases
-        self.learning_rate = 0.0005  # Learning rate for optimizer
+        self.epsilon_decay = 0.99998  # How fast epsilon decreases
+        self.learning_rate = 0.001  # Learning rate for optimizer
         self.batch_size = 32  # Number of experiences to learn from at once
         
         # Network dimensions
@@ -93,8 +93,8 @@ class TestCharacter(CharacterEntity):
         
         # Training tracking variables
         self.steps = 0  # Count of training steps
-        self.update_target_every = 500  # Update target network every 50 steps
-        self.update_network_every = 5  # Update network every 1 step
+        self.update_target_every = 100  # Update target network every 50 steps
+        self.update_network_every = 50  # Update network every 1 step
         self.total_reward = 0.0  # Track cumulative reward
         
         # Try to load existing model
@@ -134,7 +134,7 @@ class TestCharacter(CharacterEntity):
             self.last_events = events
             
             # Calculate reward including win condition
-            reward = 200  # Base reward for following optimal path
+            reward = 1500  # Base reward for following optimal path
             
             # Use the regular reward function to ensure we get win rewards
             reward += self.get_reward(wrld, current_state, ((dx, dy), False), 
@@ -313,35 +313,35 @@ class TestCharacter(CharacterEntity):
         
         # Apply exponential penalty for being near a monster
         if closest_monster_distance < 5:
-            penalty = 100 / (1 + closest_monster_distance)  # 100 when very close, decays smoothly
+            penalty = 5000 / (1 + closest_monster_distance)  # 100 when very close, decays smoothly
             reward -= penalty
 
         
         # Simple event-based rewards
         for event in events:
             if event.tpe == Event.CHARACTER_KILLED_BY_MONSTER:
-                reward -= 5000  # Increased death penalty
+                reward -= 10000  # Increased death penalty
             # elif event.tpe == Event.BOMB_HIT_CHARACTER:
-                reward -= 3000  # Increased death penalty
+                # reward -= 3000  # Increased death penalty
             if event.tpe == Event.CHARACTER_FOUND_EXIT:
                 # Base reward for winning
-                reward += 25000
+                reward += 50000
                 
                 # Bonus reward based on steps taken (more steps = less bonus)
                 time_bonus = max(500 - self.steps, 0)  # Starts at 500, decreases with steps
                 reward += time_bonus
                 
             elif event.tpe == Event.BOMB_HIT_MONSTER:
-                reward += 3000  # Increased monster kill reward
+                reward += 20000  # Increased monster kill reward
             elif event.tpe == Event.BOMB_HIT_WALL:
                 # Only reward wall destruction if it's between us and the goal
                 if self.is_wall_blocking_path(wrld, state, goal):
-                    reward += 400
+                    reward += 1000
                 else:
-                    reward += 10
+                    reward -= 2000
 
-        # if place_bomb:
-        #     reward -= 300
+#        if place_bomb:
+#            reward -= 300
 
             
         
@@ -606,9 +606,9 @@ class TestCharacter(CharacterEntity):
         # Update priorities in replay buffer using TD errors
         self.memory.update_priorities(indices, td_errors.abs().detach().cpu().numpy())
         
-    def update_target_network(self, force=False):
+    def update_target_network(self):
         """Update target network weights"""
-        if self.steps % self.update_target_every == 0 or force:
+        if self.steps % self.update_target_every == 0:
             self.target_network.load_state_dict(self.main_network.state_dict())
 
     def save_model(self):
@@ -770,16 +770,13 @@ class TestCharacter(CharacterEntity):
         return False, []
 
 
-def exit_handler(self):
+def exit_handler():
     """Save the model and log training metrics when the program exits"""
     print("🔚 Program exiting, saving model...")
     try:
         if 'testcharacter_instance' in globals() and testcharacter_instance is not None:
             # Save the model
             testcharacter_instance.save_model()
-
-            # Update target network periodically
-            self.update_target_network(True)
             
             # Log training metrics in JSONL format
             log_path = os.path.join(os.path.dirname(testcharacter_instance.model_path), "training_log.jsonl")
